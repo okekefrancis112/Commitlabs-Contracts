@@ -99,16 +99,16 @@ impl AttestationEngineContract {
         e.storage().persistent()
             .get(&(HEALTH_METRICS, commitment_id))
             .unwrap_or_else(|| {
-                HealthMetrics {
+        HealthMetrics {
                     commitment_id: id_clone,
-                    current_value: 0,
-                    initial_value: 0,
-                    drawdown_percent: 0,
-                    fees_generated: 0,
-                    volatility_exposure: 0,
-                    last_attestation: 0,
-                    compliance_score: 0,
-                }
+            current_value: 0,
+            initial_value: 0,
+            drawdown_percent: 0,
+            fees_generated: 0,
+            volatility_exposure: 0,
+            last_attestation: 0,
+            compliance_score: 0,
+        }
             })
     }
 
@@ -208,7 +208,7 @@ impl AttestationEngineContract {
 
     /// Helper function to update health metrics
     fn update_health_metrics(e: &Env, commitment_id: &String) {
-        let attestations = Self::get_attestations(e.clone(), commitment_id.clone());
+        let _attestations = Self::get_attestations(e.clone(), commitment_id.clone());
         let timestamp = e.ledger().timestamp();
 
         let mut metrics = e.storage().persistent()
@@ -235,7 +235,7 @@ impl AttestationEngineContract {
         let admin: Address = e.storage().instance().get(&ADMIN).unwrap();
         admin.require_auth();
         // Store authorized verifier - using a simple storage key
-        e.storage().instance().set(&symbol_short!("AUTH_VERIF"), &verifier);
+        e.storage().instance().set(&symbol_short!("AUTH_VER"), &verifier);
     }
 }
 
