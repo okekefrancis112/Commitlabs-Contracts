@@ -441,10 +441,24 @@ fn test_attest_event() {
 
 #[test]
 fn test_record_fees_event() {
-    let (e, admin, _commitment_core, contract_id) = setup_test_env();
+    let (e, admin, commitment_core, contract_id) = setup_test_env();
+    e.mock_all_auths();
     let client = AttestationEngineContractClient::new(&e, &contract_id);
 
     let commitment_id = String::from_str(&e, "test_id");
+    let owner = Address::generate(&e);
+    store_core_commitment(
+        &e,
+        &commitment_core,
+        "test_id",
+        &owner,
+        1000,
+        1000,
+        10,
+        30,
+        1000,
+    );
+    
     // record_fees requires caller (admin)
     client.record_fees(&admin, &commitment_id, &100);
 
@@ -463,6 +477,7 @@ fn test_record_fees_event() {
 #[test]
 fn test_record_drawdown_event() {
     let (e, admin, commitment_core, contract_id) = setup_test_env();
+    e.mock_all_auths();
     let client = AttestationEngineContractClient::new(&e, &contract_id);
 
     // Need to store a commitment first because record_drawdown fetches it
