@@ -1,7 +1,7 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, log, token, Address, Env, IntoVal, String,
+    contract, contracterror, contractimpl, contracttype, log, token, symbol_short, Address, Env, IntoVal, String,
     Symbol, Vec,
 };
 
@@ -388,10 +388,10 @@ impl CommitmentCoreContract {
     pub fn update_value(e: Env, commitment_id: u32, new_value: i128) {
         let mut commitment = read_commitment(&e, commitment_id)
             .unwrap_or_else(|| panic!("Commitment not found"));
-        
+
         // Update current_value
         commitment.current_value = new_value;
-        
+
         // Store updated commitment
         set_commitment(&e, &commitment);
     }
@@ -451,12 +451,12 @@ impl CommitmentCoreContract {
     pub fn settle(e: Env, commitment_id: u32) {
         let mut commitment = read_commitment(&e, commitment_id)
             .unwrap_or_else(|| panic!("Commitment not found"));
-        
+
         let current_time = e.ledger().timestamp();
         if current_time < commitment.expires_at {
             panic!("Commitment not yet expired");
         }
-        
+
         commitment.status = String::from_str(&e, "settled");
         set_commitment(&e, &commitment);
     }
@@ -464,15 +464,15 @@ impl CommitmentCoreContract {
     /// Early exit (with penalty)
     pub fn early_exit(e: Env, commitment_id: u32, caller: Address) {
         caller.require_auth();
-        
+
         let mut commitment = read_commitment(&e, commitment_id)
             .unwrap_or_else(|| panic!("Commitment not found"));
-        
+
         // Verify caller is owner
         if commitment.owner != caller {
             panic!("Unauthorized");
         }
-        
+
         commitment.status = String::from_str(&e, "early_exit");
         set_commitment(&e, &commitment);
     }

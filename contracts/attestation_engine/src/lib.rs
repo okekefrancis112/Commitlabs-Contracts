@@ -154,7 +154,7 @@ impl AttestationEngineContract {
             attestation_type: attestation_type.clone(),
             data,
             timestamp: e.ledger().timestamp(),
-            verified_by,
+            verified_by: verified_by.clone(),
             is_compliant: true,
         };
         
@@ -168,8 +168,8 @@ impl AttestationEngineContract {
         e.storage().persistent().set(&key, &attestations);
         
         e.events().publish(
-            (symbol_short!("attest"), commitment_id),
-            attestation_type
+            (symbol_short!("Attest"), commitment_id, verified_by.clone()),
+            (attestation_type, true, e.ledger().timestamp())
         );
     }
 
@@ -188,7 +188,7 @@ impl AttestationEngineContract {
             .instance()
             .get(&symbol_short!("CORE"))
             .unwrap();
-        
+
         let mut args = Vec::new(&e);
         args.push_back(commitment_id.into_val(&e));
         let commitment_val: Val = e.invoke_contract(
@@ -196,13 +196,13 @@ impl AttestationEngineContract {
             &Symbol::new(&e, "get_commitment"),
             args,
         );
-        
+
         let commitment: Commitment = commitment_val.try_into_val(&e).unwrap();
         let attestations = Self::get_attestations(e.clone(), commitment_id);
-        
+
         let initial_value = commitment.amount;
         let current_value = commitment.current_value;
-        
+
         let drawdown_percent = if initial_value > 0 {
             let diff = initial_value.checked_sub(current_value).unwrap_or(0);
             diff.checked_mul(100).unwrap_or(0)
@@ -210,22 +210,22 @@ impl AttestationEngineContract {
         } else {
             0
         };
-        
+
         let fees_key = (symbol_short!("FEES"), commitment_id);
         let fees_generated: i128 = e.storage()
             .persistent()
             .get(&fees_key)
             .unwrap_or(0);
-        
+
         let volatility_exposure: i128 = 0;
-        
+
         let last_attestation = attestations.iter()
             .map(|att| att.timestamp)
             .max()
             .unwrap_or(0);
-        
+
         let compliance_score = Self::calculate_compliance_score(e.clone(), commitment_id);
-        
+
         HealthMetrics {
             commitment_id,
             current_value,
@@ -257,7 +257,7 @@ impl AttestationEngineContract {
     }
 
     /// Record fee generation
-    /// 
+    ///
     /// # Arguments
     /// * `caller` - The address calling this function (must be authorized)
     /// * `commitment_id` - The commitment ID to record fees for
@@ -297,7 +297,7 @@ impl AttestationEngineContract {
         
         // 5. Emit FeeRecorded event
         e.events().publish(
-            (Symbol::new(&e, "FeeRecorded"), commitment_id),
+            (symbol_short!("FeeRec"), commitment_id),
             (fee_amount, e.ledger().timestamp())
         );
     }
@@ -412,7 +412,7 @@ impl AttestationEngineContract {
         
         // 11. Emit DrawdownRecorded event
         e.events().publish(
-            (Symbol::new(&e, "DrawdownRecorded"), commitment_id),
+            (symbol_short!("Drawdown"), commitment_id),
             (current_value, drawdown_percent, e.ledger().timestamp())
         );
     }
@@ -434,7 +434,7 @@ impl AttestationEngineContract {
         
         let commitment: Commitment = commitment_val.try_into_val(&e).unwrap();
         let attestations = Self::get_attestations(e.clone(), commitment_id);
-        
+
         let mut score: i32 = 100;
         
         let violation_count = attestations.iter()
@@ -496,6 +496,12 @@ impl AttestationEngineContract {
             score = 100;
         }
         
+        // Emit compliance score update event
+        e.events().publish(
+            (symbol_short!("ScoreUpd"), commitment_id),
+            (score as u32, e.ledger().timestamp()),
+        );
+        
         score as u32
     }
 
@@ -507,5 +513,4 @@ impl AttestationEngineContract {
     }
 }
 
-#[cfg(test)]
 mod tests;

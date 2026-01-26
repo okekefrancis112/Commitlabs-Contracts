@@ -1,7 +1,7 @@
 #![cfg(test)]
 
 use super::*;
-use soroban_sdk::{testutils::{Address as _, Ledger}, token, Address, Env, String};
+use soroban_sdk::{testutils::{Address as _, Ledger}, Address, Env, String};
 
 // Helper function to create a test commitment
 fn create_test_commitment(
@@ -554,3 +554,4 @@ fn test_check_violations_zero_amount() {
     
     assert!(!has_violations, "Zero amount should not cause issues");
 }
+

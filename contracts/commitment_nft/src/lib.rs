@@ -1,5 +1,5 @@
 #![no_std]
-use soroban_sdk::{contract, contractimpl, contracttype, contracterror, Address, Env, String, Vec, symbol_short, Symbol};
+use soroban_sdk::{contract, contractimpl, contracttype, contracterror, symbol_short, Address, Env, String, Vec, Symbol};
 
 // ============================================================================
 // Error Types
@@ -216,7 +216,7 @@ impl CommitmentNFTContract {
 
         // Create CommitmentMetadata
         let metadata = CommitmentMetadata {
-            commitment_id,
+            commitment_id: commitment_id.clone(),
             duration_days,
             max_loss_percent,
             commitment_type,
@@ -253,7 +253,10 @@ impl CommitmentNFTContract {
         e.storage().instance().set(&DataKey::TokenIds, &token_ids);
 
         // Emit mint event
-        e.events().publish((symbol_short!("mint"), owner), token_id);
+        e.events().publish(
+            (symbol_short!("Mint"), token_id, owner.clone()),
+            (commitment_id, e.ledger().timestamp()),
+        );
 
         Ok(token_id)
     }
@@ -331,7 +334,10 @@ impl CommitmentNFTContract {
         e.storage().persistent().set(&DataKey::OwnerTokens(to.clone()), &to_tokens);
 
         // Emit transfer event
-        e.events().publish((symbol_short!("transfer"), from, to), token_id);
+        e.events().publish(
+            (symbol_short!("Transfer"), from, to),
+            (token_id, e.ledger().timestamp()),
+        );
 
         Ok(())
     }
@@ -427,7 +433,10 @@ impl CommitmentNFTContract {
         e.storage().persistent().set(&DataKey::NFT(token_id), &nft);
 
         // Emit settle event
-        e.events().publish((symbol_short!("settle"),), token_id);
+        e.events().publish(
+            (symbol_short!("Settle"), token_id),
+            e.ledger().timestamp(),
+        );
 
         Ok(())
     }
@@ -449,3 +458,5 @@ impl CommitmentNFTContract {
         e.storage().persistent().has(&DataKey::NFT(token_id))
     }
 }
+
+

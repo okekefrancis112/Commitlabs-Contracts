@@ -1,7 +1,7 @@
 #![cfg(test)]
 
 use super::*;
-use soroban_sdk::{testutils::Address as _, testutils::Ledger as _, Address, Env, String, symbol_short};
+use soroban_sdk::{testutils::Address as _, testutils::Ledger as _, testutils::Events, Address, Env, String, symbol_short, vec, IntoVal, Map};
 use commitment_core::{Commitment as CoreCommitment, CommitmentCoreContract, CommitmentRules as CoreCommitmentRules, DataKey};
 
 fn store_core_commitment(
@@ -233,7 +233,7 @@ fn test_attest_and_get_metrics() {
 fn test_record_fees() {
     let (e, admin, commitment_core, contract_id) = setup_test_env();
     e.mock_all_auths();
-    
+
     let commitment_id: u32 = 1;
     let owner = Address::generate(&e);
     store_core_commitment(
@@ -247,15 +247,15 @@ fn test_record_fees() {
         30,
         1000,
     );
-    
+
     e.as_contract(&contract_id, || {
         AttestationEngineContract::record_fees(e.clone(), admin.clone(), commitment_id, 100);
     });
-    
+
     let metrics = e.as_contract(&contract_id, || {
         AttestationEngineContract::get_health_metrics(e.clone(), commitment_id)
     });
-    
+
     assert_eq!(metrics.fees_generated, 100);
 }
 
@@ -263,7 +263,7 @@ fn test_record_fees() {
 fn test_record_multiple_fees() {
     let (e, admin, commitment_core, contract_id) = setup_test_env();
     e.mock_all_auths();
-    
+
     let commitment_id: u32 = 1;
     let owner = Address::generate(&e);
     store_core_commitment(
@@ -277,7 +277,7 @@ fn test_record_multiple_fees() {
         30,
         1000,
     );
-    
+
     // Call each record_fees in separate contract context to avoid auth frame issues
     e.as_contract(&contract_id, || {
         AttestationEngineContract::record_fees(e.clone(), admin.clone(), commitment_id, 50);
@@ -288,18 +288,18 @@ fn test_record_multiple_fees() {
     e.as_contract(&contract_id, || {
         AttestationEngineContract::record_fees(e.clone(), admin.clone(), commitment_id, 20);
     });
-    
+
     let metrics = e.as_contract(&contract_id, || {
         AttestationEngineContract::get_health_metrics(e.clone(), commitment_id)
     });
-    
+
     assert_eq!(metrics.fees_generated, 100);
 }
 
 #[test]
 fn test_verify_compliance() {
     let (e, _admin, commitment_core, contract_id) = setup_test_env();
-    
+
     let commitment_id: u32 = 1;
     let owner = Address::generate(&e);
     store_core_commitment(
@@ -313,18 +313,18 @@ fn test_verify_compliance() {
         30,
         1000,
     );
-    
+
     let is_compliant = e.as_contract(&contract_id, || {
         AttestationEngineContract::verify_compliance(e.clone(), commitment_id)
     });
-    
+
     assert!(is_compliant);
 }
 
 #[test]
 fn test_health_metrics_structure() {
     let (e, _admin, commitment_core, contract_id) = setup_test_env();
-    
+
     let commitment_id: u32 = 1;
     let owner = Address::generate(&e);
     store_core_commitment(
@@ -341,7 +341,7 @@ fn test_health_metrics_structure() {
     let metrics = e.as_contract(&contract_id, || {
         AttestationEngineContract::get_health_metrics(e.clone(), commitment_id)
     });
-    
+
     assert_eq!(metrics.commitment_id, commitment_id);
     assert_eq!(metrics.current_value, 1000);
     assert_eq!(metrics.initial_value, 1000);
