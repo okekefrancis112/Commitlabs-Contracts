@@ -175,7 +175,7 @@ fn test_validate_rules_invalid_duration() {
 }
 
 #[test]
-#[should_panic(expected = "Invalid max loss percent")]
+#[should_panic(expected = "Invalid percent")]
 fn test_validate_rules_invalid_max_loss() {
     let e = Env::default();
     let contract_id = e.register_contract(None, CommitmentCoreContract);
@@ -1066,6 +1066,35 @@ fn test_update_value_event() {
     );
     let data: (i128, u64) = last_event.2.into_val(&e);
     assert_eq!(data.0, 1100);
+}
+
+#[test]
+#[should_panic(expected = "Rate limit exceeded")]
+fn test_update_value_rate_limit_enforced() {
+    let e = Env::default();
+    e.mock_all_auths();
+    let contract_id = e.register_contract(None, CommitmentCoreContract);
+    let client = CommitmentCoreContractClient::new(&e, &contract_id);
+
+    let admin = Address::generate(&e);
+    let nft_contract = Address::generate(&e);
+
+    // Initialize and configure rate limit: 1 update per 60 seconds
+    e.as_contract(&contract_id, || {
+        CommitmentCoreContract::initialize(e.clone(), admin.clone(), nft_contract.clone());
+        CommitmentCoreContract::set_rate_limit(
+            e.clone(),
+            admin.clone(),
+            symbol_short!("upd_val"),
+            60,
+            1,
+        );
+    });
+
+    let commitment_id = String::from_str(&e, "rl_test");
+    client.update_value(&commitment_id, &100);
+    // Second call within same window should panic
+    client.update_value(&commitment_id, &200);
 }
 
 #[test]
