@@ -8,11 +8,15 @@ on:
     branches:
       - master
 
+env:
+  CARGO_TERM_COLOR: always
+  RUN_TESTNET_IT: ${{ secrets.RUN_TESTNET_IT || 'false' }}
+
 jobs:
   build-and-test:
     name: Build and Test Soroban Contracts
     runs-on: macos-latest
-    
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -80,10 +84,21 @@ jobs:
           done
           echo "✓ Stellar CLI build completed"
 
-      - name: Run unit and integration tests
+      - name: Run unit tests
         run: |
-          cargo test --workspace
-          echo "✓ All tests passed"
+          cargo test --workspace --exclude integration_tests
+          echo "✓ Unit tests passed"
+
+      - name: Run integration tests (local)
+        run: |
+          cargo test --package integration_tests --lib -- --test-threads=1
+          echo "✓ Integration tests passed"
+
+      - name: Run testnet integration tests
+        if: env.RUN_TESTNET_IT == 'true'
+        run: |
+          cargo test --package integration_tests --lib --features testnet -- --test-threads=1
+          echo "✓ Testnet integration tests passed"
 
       - name: Run performance benchmarks
         run: |
@@ -96,4 +111,3 @@ jobs:
           echo "Checking for WASM build artifacts..."
           find target -name "*.wasm" -type f | head -10 || echo "No WASM files found in target directory"
           ls -la target/wasm32v1-none/release/*.wasm 2>/dev/null || echo "WASM files not found in expected location"
-

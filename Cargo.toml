@@ -5,6 +5,8 @@ members = [
     "contracts/commitment_core",
     "contracts/attestation_engine",
     "contracts/allocation_logic",
+    "contracts/mock_oracle",
+    "tests/integration",
 ]
 resolver = "2"
 

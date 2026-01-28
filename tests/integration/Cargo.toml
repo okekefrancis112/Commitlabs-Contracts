@@ -1,0 +1,24 @@
+[package]
+name = "integration_tests"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["rlib"]
+path = "lib.rs"
+
+[features]
+testutils = ["soroban-sdk/testutils"]
+testnet = []
+default = []
+
+[dependencies]
+soroban-sdk = { version = "21.0.0", features = ["testutils"] }
+shared_utils = { path = "../../contracts/shared_utils" }
+commitment_core = { path = "../../contracts/commitment_core" }
+commitment_nft = { path = "../../contracts/commitment_nft" }
+attestation_engine = { path = "../../contracts/attestation_engine" }
+allocation_logic = { path = "../../contracts/allocation_logic" }
+mock_oracle = { path = "../../contracts/mock_oracle" }
+
+[dev-dependencies]
