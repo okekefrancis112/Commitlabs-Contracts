@@ -30,11 +30,11 @@ impl SafeMath {
     }
 
     /// Calculate percentage: (value * percent) / 100
-    /// 
+    ///
     /// # Arguments
     /// * `value` - The base value
     /// * `percent` - The percentage (0-100)
-    /// 
+    ///
     /// # Returns
     /// The calculated percentage value
     pub fn percent(value: i128, percent: u32) -> i128 {
@@ -51,11 +51,11 @@ impl SafeMath {
     }
 
     /// Calculate what percentage `part` is of `whole`: (part * 100) / whole
-    /// 
+    ///
     /// # Arguments
     /// * `part` - The part value
     /// * `whole` - The whole value
-    /// 
+    ///
     /// # Returns
     /// The percentage (0-100) as i128
     pub fn percent_from(part: i128, whole: i128) -> i128 {
@@ -66,11 +66,11 @@ impl SafeMath {
     }
 
     /// Calculate loss percentage: ((initial - current) * 100) / initial
-    /// 
+    ///
     /// # Arguments
     /// * `initial` - The initial value
     /// * `current` - The current value
-    /// 
+    ///
     /// # Returns
     /// The loss percentage as i128 (can be negative if current > initial)
     pub fn loss_percent(initial: i128, current: i128) -> i128 {
@@ -82,11 +82,11 @@ impl SafeMath {
     }
 
     /// Calculate gain percentage: ((current - initial) * 100) / initial
-    /// 
+    ///
     /// # Arguments
     /// * `initial` - The initial value
     /// * `current` - The current value
-    /// 
+    ///
     /// # Returns
     /// The gain percentage as i128 (can be negative if current < initial)
     pub fn gain_percent(initial: i128, current: i128) -> i128 {
@@ -98,11 +98,11 @@ impl SafeMath {
     }
 
     /// Apply a percentage penalty: value - (value * penalty_percent / 100)
-    /// 
+    ///
     /// # Arguments
     /// * `value` - The base value
     /// * `penalty_percent` - The penalty percentage (0-100)
-    /// 
+    ///
     /// # Returns
     /// The value after applying the penalty
     pub fn apply_penalty(value: i128, penalty_percent: u32) -> i128 {
@@ -111,11 +111,11 @@ impl SafeMath {
     }
 
     /// Calculate the penalty amount: (value * penalty_percent / 100)
-    /// 
+    ///
     /// # Arguments
     /// * `value` - The base value
     /// * `penalty_percent` - The penalty percentage (0-100)
-    /// 
+    ///
     /// # Returns
     /// The penalty amount
     pub fn penalty_amount(value: i128, penalty_percent: u32) -> i128 {

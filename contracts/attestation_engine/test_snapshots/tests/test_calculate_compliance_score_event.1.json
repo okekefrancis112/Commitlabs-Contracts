@@ -46,6 +46,18 @@
                         "key": {
                           "vec": [
                             {
+                              "symbol": "ActiveCommitments"
+                            }
+                          ]
+                        },
+                        "val": {
+                          "vec": []
+                        }
+                      },
+                      {
+                        "key": {
+                          "vec": [
+                            {
                               "symbol": "Admin"
                             }
                           ]

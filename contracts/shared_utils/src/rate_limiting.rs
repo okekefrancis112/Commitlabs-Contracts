@@ -71,10 +71,7 @@ impl RateLimiter {
     /// Check if an address is exempt from rate limits.
     pub fn is_exempt(e: &Env, address: &Address) -> bool {
         let key = (keys::RATE_LIMIT_EXEMPT, address.clone());
-        e.storage()
-            .instance()
-            .get::<_, bool>(&key)
-            .unwrap_or(false)
+        e.storage().instance().get::<_, bool>(&key).unwrap_or(false)
     }
 
     /// Enforce a rate limit for a given address & function.
@@ -92,10 +89,7 @@ impl RateLimiter {
 
         // Load configuration; if none, do nothing
         let cfg_key = (keys::RATE_LIMIT_CONFIG, function.clone());
-        let config = e
-            .storage()
-            .instance()
-            .get::<_, (u64, u32)>(&cfg_key);
+        let config = e.storage().instance().get::<_, (u64, u32)>(&cfg_key);
 
         let (window_seconds, max_calls) = match config {
             Some(cfg) => cfg,
@@ -137,7 +131,7 @@ mod tests {
     use soroban_sdk::{
         contract, contractimpl,
         testutils::{Address as TestAddress, Ledger},
-        Env, Address,
+        Address, Env,
     };
 
     #[contract]
@@ -236,4 +230,3 @@ mod tests {
         client.limited_call(&caller);
     }
 }
-
