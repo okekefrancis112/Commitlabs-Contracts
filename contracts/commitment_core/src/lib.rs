@@ -2,16 +2,16 @@
 
 use soroban_sdk::{
     contract, contractimpl, contracttype,
-    Address, Env, String, Symbol, Vec,
+    Address, Env, String, Symbol, Vec, symbol_short,
     Val, IntoVal,
 };
 use soroban_sdk::token::Client as TokenClient;
 
 /* -------------------- STORAGE KEYS -------------------- */
 
-const ADMIN_KEY: Symbol = Symbol::short("ADMIN");
-const NFT_KEY: Symbol = Symbol::short("NFT");
-const COMMITMENTS_KEY: Symbol = Symbol::short("COMMS");
+const ADMIN_KEY: Symbol = symbol_short!("ADMIN");
+const NFT_KEY: Symbol = symbol_short!("NFT");
+const COMMITMENTS_KEY: Symbol = symbol_short!("COMMS");
 
 /* -------------------- DATA TYPES -------------------- */
 
@@ -96,7 +96,7 @@ impl CommitmentCoreContract {
 
         let nft_token_id: u32 = e.invoke_contract(
             &nft_contract,
-            &Symbol::short("mint"),
+            &symbol_short!("mint"),
             mint_args,
         );
 
@@ -119,7 +119,7 @@ impl CommitmentCoreContract {
         e.storage().instance().set(&COMMITMENTS_KEY, &commitments);
 
         e.events().publish(
-            (Symbol::short("CommitmentCreated"),),
+            (Symbol::new(&e, "CommitmentCreated"),),
             (commitment_id.clone(), owner, amount, now),
         );
 
@@ -151,7 +151,7 @@ impl CommitmentCoreContract {
         let mut commitments: Vec<Commitment> =
             e.storage().instance().get(&COMMITMENTS_KEY).unwrap();
 
-        for mut c in commitments.iter() {
+        for (i, mut c) in commitments.iter().enumerate() {
             if c.commitment_id == commitment_id {
                 if c.status != String::from_str(&e, "active") {
                     panic!("Not active");
@@ -167,10 +167,11 @@ impl CommitmentCoreContract {
                 }
 
                 e.events().publish(
-                    (Symbol::short("ValueUpdated"),),
+                    (Symbol::new(&e, "ValueUpdated"),),
                     (commitment_id, new_value),
                 );
 
+                commitments.set(i as u32, c);
                 e.storage().instance().set(&COMMITMENTS_KEY, &commitments);
                 return;
             }
@@ -211,14 +212,13 @@ impl CommitmentCoreContract {
         // Find the commitment first
         for (i, c) in commitments.iter().enumerate() {
             if c.commitment_id == commitment_id {
-                if c.status != String::from_str(&e, "active") {
+                if c.status == String::from_str(&e, "settled") || c.status == String::from_str(&e, "early_exit") {
                     panic!("Already settled");
                 }
 
-                // Check if expired or within grace period
-                let grace_period_end = c.expires_at + (c.rules.grace_period_days as u64 * 86400);
-                if now < c.expires_at && now >= grace_period_end {
-                    panic!("Commitment not expired and grace period has passed");
+                // Check if expired (maturity reached)
+                if now < c.expires_at {
+                    panic!("Commitment not expired");
                 }
 
                 found_index = Some(i);
@@ -228,7 +228,7 @@ impl CommitmentCoreContract {
         }
 
         // If commitment not found, panic
-        let commitment = match commitment_to_settle {
+        let mut commitment = match commitment_to_settle {
             Some(c) => c,
             None => panic!("Commitment not found"),
         };
@@ -250,13 +250,13 @@ impl CommitmentCoreContract {
 
         e.invoke_contract::<()>(
             &nft_contract,
-            &Symbol::short("Mark_settled"),
+            &symbol_short!("settle"),
             args,
         );
 
         // Emit settlement event
         e.events().publish(
-            (Symbol::short("Commitment Settled"),),
+            (Symbol::new(&e, "CommitmentSettled"),),
             (
                 commitment_id.clone(),
                 commitment.owner.clone(),
@@ -265,12 +265,12 @@ impl CommitmentCoreContract {
             ),
         );
 
-        // Remove the commitment from the active list
+        // Mark as settled and update storage
         if let Some(index) = found_index {
-            commitments.remove(index as u32);
+            commitment.status = String::from_str(&e, "settled");
+            commitments.set(index as u32, commitment);
+            e.storage().instance().set(&COMMITMENTS_KEY, &commitments);
         }
-
-        e.storage().instance().set(&COMMITMENTS_KEY, &commitments);
     }
 
     /* ---------- EARLY EXIT ---------- */
@@ -281,7 +281,7 @@ impl CommitmentCoreContract {
         let mut commitments: Vec<Commitment> =
             e.storage().instance().get(&COMMITMENTS_KEY).unwrap();
 
-        for mut c in commitments.iter() {
+        for (i, mut c) in commitments.iter().enumerate() {
             if c.commitment_id == commitment_id {
                 if caller != c.owner {
                     panic!("Unauthorized");
@@ -305,10 +305,11 @@ impl CommitmentCoreContract {
                 c.status = String::from_str(&e, "early_exit");
 
                 e.events().publish(
-                    (Symbol::short("EarlyExit"),),
+                    (symbol_short!("EarlyExit"),),
                     (commitment_id, payout),
                 );
 
+                commitments.set(i as u32, c);
                 e.storage().instance().set(&COMMITMENTS_KEY, &commitments);
                 return;
             }
@@ -346,7 +347,7 @@ impl CommitmentCoreContract {
                     );
 
                 e.events().publish(
-                    (Symbol::short("Allocated"),),
+                    (symbol_short!("Allocated"),),
                     (commitment_id, target_pool, amount),
                 );
 
@@ -361,7 +362,7 @@ impl CommitmentCoreContract {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soroban_sdk::{symbol_short, testutils::Address as _, Address, Env, String, Symbol, Vec};
+    use soroban_sdk::{symbol_short, testutils::{Address as _, Ledger as _}, Address, Env, String, Vec};
 
     /* -------------------- DUMMY CONTRACTS -------------------- */
 
@@ -370,7 +371,7 @@ mod tests {
 
     #[contractimpl]
     impl DummyTokenContract {
-        pub fn transfer(from: Address, to: Address, amount: i128) {
+        pub fn transfer(_from: Address, _to: Address, _amount: i128) {
             // record transfer for assertions
         }
     }
@@ -380,13 +381,13 @@ mod tests {
 
     #[contractimpl]
     impl DummyNFTContract {
-        pub fn mint(owner: Address, commitment_id: String) -> u32 {
+        pub fn mint(_owner: Address, _commitment_id: String) -> u32 {
             1
         }
 
-        pub fn mark_settled(token_id: u32) {
-            // record settled
-        }
+    pub fn settle(_e: Env, _token_id: u32) {
+        // record settled
+    }
     }
 
     /* -------------------- HELPER FUNCTIONS -------------------- */
@@ -422,6 +423,16 @@ mod tests {
 
     fn setup_test_env() -> (Env, Address, Address, Address) {
         let e = Env::default();
+        e.ledger().set(soroban_sdk::testutils::LedgerInfo {
+            timestamp: 10000000,
+            protocol_version: 21,
+            sequence_number: 1,
+            network_id: [0u8; 32],
+            base_reserve: 10,
+            min_temp_entry_ttl: 16,
+            min_persistent_entry_ttl: 4096,
+            max_entry_ttl: 6312000,
+        });
         let token_id = e.register_contract(None, DummyTokenContract);
         let nft_id = e.register_contract(None, DummyNFTContract);
         let core_id = e.register_contract(None, CommitmentCoreContract);
@@ -434,14 +445,16 @@ mod tests {
     #[test]
     fn test_initialize() {
         let e = Env::default();
+        e.mock_all_auths();
         let admin = Address::generate(&e);
         let nft_contract = Address::generate(&e);
         let contract_id = e.register_contract(None, CommitmentCoreContract);
+        let client = CommitmentCoreContractClient::new(&e, &contract_id);
         
-        CommitmentCoreContract::initialize(e.clone(), admin.clone(), nft_contract.clone());
+        client.initialize(&admin, &nft_contract);
         
-        let stored_admin: Address = e.storage().instance().get(&Symbol::short("ADMIN")).unwrap();
-        let stored_nft: Address = e.storage().instance().get(&Symbol::short("NFT")).unwrap();
+        let stored_admin: Address = e.as_contract(&contract_id, || e.storage().instance().get(&symbol_short!("ADMIN")).unwrap());
+        let stored_nft: Address = e.as_contract(&contract_id, || e.storage().instance().get(&symbol_short!("NFT")).unwrap());
         
         assert_eq!(stored_admin, admin);
         assert_eq!(stored_nft, nft_contract);
@@ -450,12 +463,14 @@ mod tests {
     #[test]
     fn test_settlement_flow_basic() {
         let (e, token_addr, nft_addr, core_addr) = setup_test_env();
+        let client = CommitmentCoreContractClient::new(&e, &core_addr);
+        e.mock_all_auths();
         
         let owner = Address::generate(&e);
         let admin = Address::generate(&e);
         
         // Initialize contract
-        CommitmentCoreContract::initialize(e.clone(), admin.clone(), nft_addr.clone());
+        client.initialize(&admin, &nft_addr);
         
         // Create an expired commitment
         let now = e.ledger().timestamp();
@@ -481,138 +496,189 @@ mod tests {
         
         let mut commitments: Vec<Commitment> = Vec::new(&e);
         commitments.push_back(commitment.clone());
-        e.storage().instance().set(&Symbol::short("COMMS"), &commitments);
+        e.as_contract(&core_addr, || e.storage().instance().set(&symbol_short!("COMMS"), &commitments));
         
         // Settle the commitment
-        CommitmentCoreContract::settle(e.clone(), String::from_str(&e, "settle_test_1"));
+        client.settle(&String::from_str(&e, "settle_test_1"));
         
-        // Verify settlement (commitment removed from active list)
-        let updated_commitments: Vec<Commitment> = e.storage().instance().get(&Symbol::short("COMMS")).unwrap();
-        assert_eq!(updated_commitments.len(), 0); // Commitment should be removed
+        // Verify settlement (status changed to settled)
+        let updated_commitments: Vec<Commitment> = e.as_contract(&core_addr, || e.storage().instance().get(&symbol_short!("COMMS")).unwrap());
+        assert_eq!(updated_commitments.len(), 1); 
+        assert_eq!(updated_commitments.get(0).unwrap().status, String::from_str(&e, "settled"));
     }
 
     #[test]
-    #[should_panic(expected = "Commitment not expired and grace period has passed")]
+    #[should_panic(expected = "Commitment not expired")]
     fn test_settlement_rejects_active_commitment() {
-        let (e, token_addr, nft_addr, _core_addr) = setup_test_env();
+        let (e, _token_addr, nft_addr, core_addr) = setup_test_env();
+        let client = CommitmentCoreContractClient::new(&e, &core_addr);
+        e.mock_all_auths();
         
         let owner = Address::generate(&e);
         let admin = Address::generate(&e);
         
         // Initialize
-        CommitmentCoreContract::initialize(e.clone(), admin.clone(), nft_addr.clone());
+        client.initialize(&admin, &nft_addr);
         
         // Create non-expired commitment
         let commitment = create_test_commitment(&e, "not_expired", owner.clone(), false);
         
         let mut commitments: Vec<Commitment> = Vec::new(&e);
         commitments.push_back(commitment);
-        e.storage().instance().set(&Symbol::short("COMMS"), &commitments);
+        e.as_contract(&core_addr, || e.storage().instance().set(&symbol_short!("COMMS"), &commitments));
         
         // Try to settle; should panic
-        CommitmentCoreContract::settle(e.clone(), String::from_str(&e, "not_expired"));
+        client.settle(&String::from_str(&e, "not_expired"));
     }
 
     #[test]
     #[should_panic(expected = "Commitment not found")]
     fn test_settlement_commitment_not_found() {
-        let (e, _token_addr, nft_addr, _core_addr) = setup_test_env();
+        let (e, _token_addr, nft_addr, core_addr) = setup_test_env();
+        let client = CommitmentCoreContractClient::new(&e, &core_addr);
+        e.mock_all_auths();
         
         let admin = Address::generate(&e);
         
         // Initialize
-        CommitmentCoreContract::initialize(e.clone(), admin.clone(), nft_addr.clone());
+        client.initialize(&admin, &nft_addr);
         
         // Try to settle non-existent commitment
-        CommitmentCoreContract::settle(e.clone(), String::from_str(&e, "nonexistent"));
+        client.settle(&String::from_str(&e, "nonexistent"));
     }
 
     #[test]
     #[should_panic(expected = "Already settled")]
     fn test_settlement_already_settled() {
-        let (e, token_addr, nft_addr, _core_addr) = setup_test_env();
+        let (e, _token_addr, nft_addr, core_addr) = setup_test_env();
+        let client = CommitmentCoreContractClient::new(&e, &core_addr);
+        e.mock_all_auths();
         
         let owner = Address::generate(&e);
         let admin = Address::generate(&e);
         
         // Initialize
-        CommitmentCoreContract::initialize(e.clone(), admin.clone(), nft_addr.clone());
+        client.initialize(&admin, &nft_addr);
         
         // Create expired commitment already settled
-        let now = e.ledger().timestamp();
+        let _now = e.ledger().timestamp();
         let mut commitment = create_test_commitment(&e, "already_settled", owner.clone(), true);
         commitment.status = String::from_str(&e, "settled");
         
         let mut commitments: Vec<Commitment> = Vec::new(&e);
         commitments.push_back(commitment);
-        e.storage().instance().set(&Symbol::short("COMMS"), &commitments);
+        e.as_contract(&core_addr, || e.storage().instance().set(&symbol_short!("COMMS"), &commitments));
         
         // Try to settle already settled commitment; should panic
-        CommitmentCoreContract::settle(e.clone(), String::from_str(&e, "already_settled"));
+        client.settle(&String::from_str(&e, "already_settled"));
     }
 
     #[test]
     fn test_expiration_check_expired() {
-        let (e, _token_addr, nft_addr, _core_addr) = setup_test_env();
+        let (e, _token_addr, nft_addr, core_addr) = setup_test_env();
+        let client = CommitmentCoreContractClient::new(&e, &core_addr);
+        e.mock_all_auths();
         
         let admin = Address::generate(&e);
         let owner = Address::generate(&e);
         
         // Initialize
-        CommitmentCoreContract::initialize(e.clone(), admin.clone(), nft_addr.clone());
+        client.initialize(&admin, &nft_addr);
         
         // Create expired commitment
         let commitment = create_test_commitment(&e, "expired_check", owner, true);
         let mut commitments: Vec<Commitment> = Vec::new(&e);
         commitments.push_back(commitment);
-        e.storage().instance().set(&Symbol::short("COMMS"), &commitments);
+        e.as_contract(&core_addr, || e.storage().instance().set(&symbol_short!("COMMS"), &commitments));
         
         // Check violations
-        let is_violated = CommitmentCoreContract::check_violations(
-            e.clone(),
-            String::from_str(&e, "expired_check"),
-        );
-        assert!(is_violated);
+        let is_violated = client.check_violations(&String::from_str(&e, "expired_check"));
+        // Note: is_violated is true only if past grace period (3 days)
+        // expired_check is only 100s past expires_at, so it's NOT violated yet
+        assert!(!is_violated);
     }
 
     #[test]
     fn test_expiration_check_not_expired() {
-        let (e, _token_addr, nft_addr, _core_addr) = setup_test_env();
+        let (e, _token_addr, nft_addr, core_addr) = setup_test_env();
+        let client = CommitmentCoreContractClient::new(&e, &core_addr);
+        e.mock_all_auths();
         
         let admin = Address::generate(&e);
         let owner = Address::generate(&e);
         
         // Initialize
-        CommitmentCoreContract::initialize(e.clone(), admin.clone(), nft_addr.clone());
+        client.initialize(&admin, &nft_addr);
         
         // Create active (non-expired) commitment
         let commitment = create_test_commitment(&e, "not_expired_check", owner, false);
         let mut commitments: Vec<Commitment> = Vec::new(&e);
         commitments.push_back(commitment);
-        e.storage().instance().set(&Symbol::short("COMMS"), &commitments);
+        e.as_contract(&core_addr, || e.storage().instance().set(&symbol_short!("COMMS"), &commitments));
         
         // Check violations
-        let is_violated = CommitmentCoreContract::check_violations(
-            e.clone(),
-            String::from_str(&e, "not_expired_check"),
-        );
+        let is_violated = client.check_violations(&String::from_str(&e, "not_expired_check"));
         assert!(!is_violated);
     }
 
     #[test]
+    fn test_expiration_check_violated() {
+        let (e, _token_addr, nft_addr, core_addr) = setup_test_env();
+        let client = CommitmentCoreContractClient::new(&e, &core_addr);
+        e.mock_all_auths();
+        
+        let admin = Address::generate(&e);
+        let owner = Address::generate(&e);
+        
+        // Initialize
+        client.initialize(&admin, &nft_addr);
+        
+        // Create commitment past grace period
+        let now = e.ledger().timestamp();
+        let commitment = Commitment {
+            commitment_id: String::from_str(&e, "violated_check"),
+            owner,
+            nft_token_id: 1,
+            rules: CommitmentRules {
+                duration_days: 7,
+                max_loss_percent: 20,
+                commitment_type: String::from_str(&e, "balanced"),
+                early_exit_penalty: 5,
+                min_fee_threshold: 0,
+                grace_period_days: 1,
+            },
+            amount: 1000,
+            asset_address: Address::generate(&e),
+            created_at: now - 1000000,
+            expires_at: now - 200000, // past 1 day grace period (86400)
+            current_value: 1000,
+            status: String::from_str(&e, "active"),
+        };
+        let mut commitments: Vec<Commitment> = Vec::new(&e);
+        commitments.push_back(commitment);
+        e.as_contract(&core_addr, || e.storage().instance().set(&symbol_short!("COMMS"), &commitments));
+        
+        // Check violations
+        let is_violated = client.check_violations(&String::from_str(&e, "violated_check"));
+        assert!(is_violated);
+    }
+
+    #[test]
     fn test_asset_transfer_on_settlement() {
-        let (e, token_addr, nft_addr, _core_addr) = setup_test_env();
+        let (e, token_addr, nft_addr, core_addr) = setup_test_env();
+        let client = CommitmentCoreContractClient::new(&e, &core_addr);
+        e.mock_all_auths();
         
         let owner = Address::generate(&e);
         let admin = Address::generate(&e);
         let settlement_amount = 7500i128;
         
         // Initialize
-        CommitmentCoreContract::initialize(e.clone(), admin.clone(), nft_addr.clone());
+        client.initialize(&admin, &nft_addr);
         
         // Create expired commitment
         let now = e.ledger().timestamp();
-        let mut commitment = Commitment {
+        let commitment = Commitment {
             commitment_id: String::from_str(&e, "transfer_test"),
             owner: owner.clone(),
             nft_token_id: 102,
@@ -634,25 +700,28 @@ mod tests {
         
         let mut commitments: Vec<Commitment> = Vec::new(&e);
         commitments.push_back(commitment);
-        e.storage().instance().set(&Symbol::short("COMMS"), &commitments);
+        e.as_contract(&core_addr, || e.storage().instance().set(&symbol_short!("COMMS"), &commitments));
         
         // Settle - this will call token transfer
-        CommitmentCoreContract::settle(e.clone(), String::from_str(&e, "transfer_test"));
+        client.settle(&String::from_str(&e, "transfer_test"));
         
-        // Verify the commitment is removed from active list (settled)
-        let updated_commitments: Vec<Commitment> = e.storage().instance().get(&Symbol::short("COMMS")).unwrap();
-        assert_eq!(updated_commitments.len(), 0); // Commitment should be removed after settlement
+        // Verify the commitment status updated
+        let updated_commitments: Vec<Commitment> = e.as_contract(&core_addr, || e.storage().instance().get(&symbol_short!("COMMS")).unwrap());
+        assert_eq!(updated_commitments.len(), 1);
+        assert_eq!(updated_commitments.get(0).unwrap().status, String::from_str(&e, "settled"));
     }
 
     #[test]
     fn test_settlement_with_different_values() {
-        let (e, _token_addr, nft_addr, _core_addr) = setup_test_env();
+        let (e, token_addr, nft_addr, core_addr) = setup_test_env();
+        let client = CommitmentCoreContractClient::new(&e, &core_addr);
+        e.mock_all_auths();
         
         let owner = Address::generate(&e);
         let admin = Address::generate(&e);
         
         // Initialize
-        CommitmentCoreContract::initialize(e.clone(), admin.clone(), nft_addr.clone());
+        client.initialize(&admin, &nft_addr);
         
         let now = e.ledger().timestamp();
         
@@ -670,7 +739,7 @@ mod tests {
                 grace_period_days: 7,
             },
             amount: 10000,
-            asset_address: Address::generate(&e),
+            asset_address: token_addr.clone(),
             created_at: now - 2592000,
             expires_at: now - 1,
             current_value: 11000,
@@ -679,24 +748,26 @@ mod tests {
         
         let mut commitments: Vec<Commitment> = Vec::new(&e);
         commitments.push_back(commitment_gain);
-        e.storage().instance().set(&Symbol::short("COMMS"), &commitments);
+        e.as_contract(&core_addr, || e.storage().instance().set(&symbol_short!("COMMS"), &commitments));
         
-        CommitmentCoreContract::settle(e.clone(), String::from_str(&e, "gain_test"));
+        client.settle(&String::from_str(&e, "gain_test"));
         
-        let updated: Vec<Commitment> = e.storage().instance().get(&Symbol::short("COMMS")).unwrap();
-        assert_eq!(updated.len(), 0); // Commitment should be removed after settlement
+        let updated: Vec<Commitment> = e.as_contract(&core_addr, || e.storage().instance().get(&symbol_short!("COMMS")).unwrap());
+        assert_eq!(updated.get(0).unwrap().status, String::from_str(&e, "settled"));
     }
 
     #[test]
     fn test_cross_contract_nft_settlement() {
-        let (e, token_addr, nft_addr, _core_addr) = setup_test_env();
+        let (e, token_addr, nft_addr, core_addr) = setup_test_env();
+        let client = CommitmentCoreContractClient::new(&e, &core_addr);
+        e.mock_all_auths();
         
         let owner = Address::generate(&e);
         let admin = Address::generate(&e);
         let nft_token_id = 999u32;
         
         // Initialize
-        CommitmentCoreContract::initialize(e.clone(), admin.clone(), nft_addr.clone());
+        client.initialize(&admin, &nft_addr);
         
         // Create expired commitment with specific NFT ID
         let now = e.ledger().timestamp();
@@ -722,25 +793,27 @@ mod tests {
         
         let mut commitments: Vec<Commitment> = Vec::new(&e);
         commitments.push_back(commitment);
-        e.storage().instance().set(&Symbol::short("COMMS"), &commitments);
+        e.as_contract(&core_addr, || e.storage().instance().set(&symbol_short!("COMMS"), &commitments));
         
         // Settle - this will invoke NFT contract
-        CommitmentCoreContract::settle(e.clone(), String::from_str(&e, "nft_cross_contract"));
+        client.settle(&String::from_str(&e, "nft_cross_contract"));
         
-        // Verify settlement completed (commitment removed from active list)
-        let updated_commitments: Vec<Commitment> = e.storage().instance().get(&Symbol::short("COMMS")).unwrap();
-        assert_eq!(updated_commitments.len(), 0); // Commitment should be removed after settlement
+        // Verify settlement completed (status updated)
+        let updated_commitments: Vec<Commitment> = e.as_contract(&core_addr, || e.storage().instance().get(&symbol_short!("COMMS")).unwrap());
+        assert_eq!(updated_commitments.get(0).unwrap().status, String::from_str(&e, "settled"));
     }
 
     #[test]
     fn test_settlement_removes_commitment_status() {
-        let (e, _token_addr, nft_addr, _core_addr) = setup_test_env();
+        let (e, token_addr, nft_addr, core_addr) = setup_test_env();
+        let client = CommitmentCoreContractClient::new(&e, &core_addr);
+        e.mock_all_auths();
         
         let owner = Address::generate(&e);
         let admin = Address::generate(&e);
         
         // Initialize
-        CommitmentCoreContract::initialize(e.clone(), admin.clone(), nft_addr.clone());
+        client.initialize(&admin, &nft_addr);
         
         // Create multiple commitments
         let now = e.ledger().timestamp();
@@ -757,7 +830,7 @@ mod tests {
                 grace_period_days: 1,
             },
             amount: 1000,
-            asset_address: Address::generate(&e),
+            asset_address: token_addr.clone(),
             created_at: now - 100000,
             expires_at: now - 1000,
             current_value: 1000,
@@ -777,7 +850,7 @@ mod tests {
                 grace_period_days: 5,
             },
             amount: 2000,
-            asset_address: Address::generate(&e),
+            asset_address: token_addr.clone(),
             created_at: now,
             expires_at: now + 2592000,
             current_value: 2000,
@@ -787,15 +860,21 @@ mod tests {
         let mut commitments: Vec<Commitment> = Vec::new(&e);
         commitments.push_back(commitment1);
         commitments.push_back(commitment2);
-        e.storage().instance().set(&Symbol::short("COMMS"), &commitments);
+        e.as_contract(&core_addr, || e.storage().instance().set(&symbol_short!("COMMS"), &commitments));
         
         // Settle first commitment
-        CommitmentCoreContract::settle(e.clone(), String::from_str(&e, "multi_1"));
+        client.settle(&String::from_str(&e, "multi_1"));
         
-        // Verify only first is removed (settled commitments are removed from active list)
-        let updated_commitments: Vec<Commitment> = e.storage().instance().get(&Symbol::short("COMMS")).unwrap();
-        assert_eq!(updated_commitments.len(), 1); // Only commitment2 should remain
-        assert_eq!(updated_commitments.get(0).unwrap().commitment_id, String::from_str(&e, "multi_2"));
-        assert_eq!(updated_commitments.get(0).unwrap().status, String::from_str(&e, "active"));
+        // Verify status updated (still in list but not active)
+        let updated_commitments: Vec<Commitment> = e.as_contract(&core_addr, || e.storage().instance().get(&symbol_short!("COMMS")).unwrap());
+        assert_eq!(updated_commitments.len(), 2); 
+        
+        for c in updated_commitments.iter() {
+            if c.commitment_id == String::from_str(&e, "multi_1") {
+                assert_eq!(c.status, String::from_str(&e, "settled"));
+            } else {
+                assert_eq!(c.status, String::from_str(&e, "active"));
+            }
+        }
     }
 }
