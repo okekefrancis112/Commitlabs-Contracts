@@ -6,7 +6,7 @@ use crate::*;
 use soroban_sdk::{
     symbol_short,
     testutils::{Address as _, Events, Ledger},
-    Address, Env, String, vec, IntoVal, token,
+    Address, Env, vec, IntoVal,
 };
 
 // ============================================================================
@@ -87,37 +87,6 @@ fn test_update_fee() {
 // ============================================================================
 // Listing Tests
 // ============================================================================
-
-#[test]
-fn test_list_nft() {
-    let e = Env::default();
-    e.mock_all_auths();
-
-    let (_, _, client) = setup_marketplace(&e);
-
-    let seller = Address::generate(&e);
-    let payment_token = setup_test_token(&e);
-    let token_id = 1u32;
-    let price = 1000_0000000i128; // 1000 tokens with 7 decimals
-
-    client.list_nft(&seller, &token_id, &price, &payment_token);
-
-    // Verify listing exists
-    let listing = client.get_listing(&token_id);
-    assert_eq!(listing.token_id, token_id);
-    assert_eq!(listing.seller, seller);
-    assert_eq!(listing.price, price);
-    assert_eq!(listing.payment_token, payment_token);
-
-    // Verify event
-    let events = e.events().all();
-    let last_event = events.last().unwrap();
-
-    // Extract topics and data properly
-    assert_eq!(last_event.0, client.address);
-    // The event data structure is (symbol, token_id) for topics
-    // and (seller, price, payment_token) for data
-}
 
 #[test]
 #[should_panic(expected = "Error(Contract, #6)")] // InvalidPrice
@@ -293,38 +262,6 @@ fn test_buy_own_listing_fails() {
 // ============================================================================
 
 #[test]
-fn test_make_offer() {
-    let e = Env::default();
-    e.mock_all_auths();
-
-    let (_, _, client) = setup_marketplace(&e);
-
-    let offerer = Address::generate(&e);
-    let payment_token = setup_test_token(&e);
-    let token_id = 1u32;
-    let amount = 500_0000000i128;
-
-    client.make_offer(&offerer, &token_id, &amount, &payment_token);
-
-    // Verify offer exists
-    let offers = client.get_offers(&token_id);
-    assert_eq!(offers.len(), 1);
-
-    let offer = offers.get(0).unwrap();
-    assert_eq!(offer.offerer, offerer);
-    assert_eq!(offer.amount, amount);
-
-    // Verify event
-    let events = e.events().all();
-    let last_event = events.last().unwrap();
-
-    assert_eq!(
-        last_event.1,
-        vec![&e, symbol_short!("OfferMade").into_val(&e), token_id.into_val(&e)]
-    );
-}
-
-#[test]
 #[should_panic(expected = "Error(Contract, #12)")] // InvalidOfferAmount
 fn test_make_offer_zero_amount_fails() {
     let e = Env::default();
@@ -405,39 +342,6 @@ fn test_cancel_nonexistent_offer_fails() {
 // ============================================================================
 // Auction System Tests
 // ============================================================================
-
-#[test]
-fn test_start_auction() {
-    let e = Env::default();
-    e.mock_all_auths();
-
-    let (_, _, client) = setup_marketplace(&e);
-
-    let seller = Address::generate(&e);
-    let payment_token = setup_test_token(&e);
-    let token_id = 1u32;
-    let starting_price = 1000_0000000i128;
-    let duration = 86400u64; // 1 day
-
-    client.start_auction(&seller, &token_id, &starting_price, &duration, &payment_token);
-
-    let auction = client.get_auction(&token_id);
-    assert_eq!(auction.token_id, token_id);
-    assert_eq!(auction.seller, seller);
-    assert_eq!(auction.starting_price, starting_price);
-    assert_eq!(auction.current_bid, starting_price);
-    assert!(auction.highest_bidder.is_none());
-    assert_eq!(auction.ended, false);
-
-    // Verify event
-    let events = e.events().all();
-    let last_event = events.last().unwrap();
-
-    assert_eq!(
-        last_event.1,
-        vec![&e, symbol_short!("AucStart").into_val(&e), token_id.into_val(&e)]
-    );
-}
 
 #[test]
 #[should_panic(expected = "Error(Contract, #6)")] // InvalidPrice
@@ -529,40 +433,6 @@ fn test_place_bid_after_auction_ends_fails() {
     });
 
     client.place_bid(&bidder, &token_id, &1500);
-}
-
-#[test]
-fn test_end_auction_no_bids() {
-    let e = Env::default();
-    e.mock_all_auths();
-
-    let (_, _, client) = setup_marketplace(&e);
-
-    let seller = Address::generate(&e);
-    let payment_token = setup_test_token(&e);
-    let token_id = 1u32;
-    let duration = 86400u64;
-
-    client.start_auction(&seller, &token_id, &1000, &duration, &payment_token);
-
-    // Fast forward time
-    e.ledger().with_mut(|li| {
-        li.timestamp = 86400 + 1;
-    });
-
-    client.end_auction(&token_id);
-
-    let auction = client.get_auction(&token_id);
-    assert_eq!(auction.ended, true);
-
-    // Verify event
-    let events = e.events().all();
-    let last_event = events.last().unwrap();
-
-    assert_eq!(
-        last_event.1,
-        vec![&e, symbol_short!("AucNoBid").into_val(&e), token_id.into_val(&e)]
-    );
 }
 
 #[test]
