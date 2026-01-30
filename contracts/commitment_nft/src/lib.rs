@@ -1,5 +1,4 @@
 #![no_std]
-use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, String};
 use soroban_sdk::{contract, contractimpl, contracttype, contracterror, symbol_short, Address, Env, String, Vec, Symbol};
 
 // ============================================================================
@@ -96,7 +95,7 @@ pub enum DataKey {
 }
 
 // Events
-const MINT: soroban_sdk::Symbol = symbol_short!("mint");
+// const MINT: soroban_sdk::Symbol = symbol_short!("mint"); // TODO: Use this in mint function
 
 #[cfg(test)]
 mod tests;
@@ -111,9 +110,6 @@ pub struct CommitmentNFTContract;
 #[contractimpl]
 impl CommitmentNFTContract {
     /// Initialize the NFT contract
-    pub fn initialize(_e: Env, _admin: Address) {
-        // TODO: Store admin address
-        // TODO: Initialize storage
     pub fn initialize(e: Env, admin: Address) -> Result<(), ContractError> {
         // Check if already initialized
         if e.storage().instance().has(&DataKey::Admin) {
@@ -201,21 +197,6 @@ impl CommitmentNFTContract {
     /// Uses checks-effects-interactions pattern. This function only writes to storage
     /// and doesn't make external calls, but still protected for consistency.
     pub fn mint(
-        _e: Env,
-        _owner: Address,
-        _commitment_id: String,
-        _duration_days: u32,
-        _max_loss_percent: u32,
-        _commitment_type: String,
-        _initial_amount: i128,
-        _asset_address: Address,
-    ) -> u32 {
-        // TODO: Generate unique token_id
-        // TODO: Calculate expires_at from duration_days
-        // TODO: Create CommitmentMetadata
-        // TODO: Store NFT data
-        // TODO: Emit mint event
-        0 // Placeholder token_id
         e: Env,
         owner: Address,
         commitment_id: String,
@@ -327,18 +308,6 @@ impl CommitmentNFTContract {
     // ========================================================================
 
     /// Get NFT metadata by token_id
-    pub fn get_metadata(e: Env, _token_id: u32) -> CommitmentMetadata {
-        // TODO: Retrieve and return metadata
-        CommitmentMetadata {
-            commitment_id: String::from_str(&e, "placeholder"),
-            duration_days: 0,
-            max_loss_percent: 0,
-            commitment_type: String::from_str(&e, "placeholder"),
-            created_at: 0,
-            expires_at: 0,
-            initial_amount: 0,
-            asset_address: Address::from_string(&String::from_str(&e, "placeholder")),
-        }
     pub fn get_metadata(e: Env, token_id: u32) -> Result<CommitmentNFT, ContractError> {
         e.storage()
             .persistent()
@@ -348,23 +317,6 @@ impl CommitmentNFTContract {
 
 
     /// Get owner of NFT
-    pub fn owner_of(e: Env, _token_id: u32) -> Address {
-        // TODO: Retrieve owner from storage
-        Address::from_string(&String::from_str(&e, "placeholder"))
-    }
-
-    /// Transfer NFT to new owner
-    pub fn transfer(_e: Env, _from: Address, _to: Address, _token_id: u32) {
-        // TODO: Verify ownership
-        // TODO: Check if transfer is allowed (not locked)
-        // TODO: Update owner
-        // TODO: Emit transfer event
-    }
-
-    /// Check if NFT is active
-    pub fn is_active(_e: Env, _token_id: u32) -> bool {
-        // TODO: Check if commitment is still active
-        false
     pub fn owner_of(e: Env, token_id: u32) -> Result<Address, ContractError> {
         let nft: CommitmentNFT = e
             .storage()
@@ -527,10 +479,6 @@ impl CommitmentNFTContract {
     // ========================================================================
 
     /// Mark NFT as settled (after maturity)
-    pub fn settle(_e: Env, _token_id: u32) {
-        // TODO: Verify expiration
-        // TODO: Mark as inactive
-        // TODO: Emit settle event
     /// 
     /// # Reentrancy Protection
     /// Uses checks-effects-interactions pattern. This function only writes to storage
