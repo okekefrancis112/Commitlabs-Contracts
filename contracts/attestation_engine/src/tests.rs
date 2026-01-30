@@ -259,7 +259,8 @@ fn test_verify_compliance() {
 
     // Initialize attestation_engine contract
     e.as_contract(&contract_id, || {
-        AttestationEngineContract::initialize(e.clone(), admin.clone(), commitment_core_id.clone()).unwrap();
+        AttestationEngineContract::initialize(e.clone(), admin.clone(), commitment_core_id.clone())
+            .unwrap();
     });
 
     (e, admin, commitment_core_id, contract_id)
@@ -597,7 +598,8 @@ fn test_attest_and_get_metrics() {
             attestation_type.clone(),
             data.clone(),
             true,
-        ).unwrap();
+        )
+        .unwrap();
     });
 
     // Get attestations and verify
@@ -644,7 +646,9 @@ fn test_attest_reentrancy_protection() {
 
     // Manually set reentrancy guard to simulate reentrancy
     e.as_contract(&contract_id, || {
-        e.storage().instance().set(&super::DataKey::ReentrancyGuard, &true);
+        e.storage()
+            .instance()
+            .set(&super::DataKey::ReentrancyGuard, &true);
     });
 
     // Try to attest, should panic
@@ -660,15 +664,87 @@ fn test_attest_reentrancy_protection() {
     });
 }
 
-    assert_eq!(last_event.0, contract_id);
-    assert_eq!(
-        last_event.1,
-        vec![
-            &e,
-            symbol_short!("Attest").into_val(&e),
-            commitment_id.into_val(&e),
-            verified_by.into_val(&e)
-        ]
+// ============================================================================
+// Access Control Tests
+// ============================================================================
+
+#[test]
+fn test_add_verifier_success() {
+    let (e, admin, _commitment_core, contract_id) = setup_test_env();
+
+    let verifier = Address::generate(&e);
+
+    // Add verifier as admin
+    e.as_contract(&contract_id, || {
+        AttestationEngineContract::add_verifier(e.clone(), admin.clone(), verifier.clone())
+            .unwrap();
+    });
+
+    // Verify the verifier is now authorized
+    let is_verifier = e.as_contract(&contract_id, || {
+        AttestationEngineContract::is_verifier(e.clone(), verifier.clone())
+    });
+    assert!(is_verifier);
+}
+
+#[test]
+fn test_add_verifier_unauthorized() {
+    let (e, _admin, _commitment_core, contract_id) = setup_test_env();
+
+    let non_admin = Address::generate(&e);
+    let verifier = Address::generate(&e);
+
+    // Try to add verifier as non-admin
+    let result = e.as_contract(&contract_id, || {
+        AttestationEngineContract::add_verifier(e.clone(), non_admin.clone(), verifier.clone())
+    });
+
+    assert_eq!(result, Err(AttestationError::Unauthorized));
+}
+
+#[test]
+fn test_remove_verifier_success() {
+    let (e, admin, _commitment_core, contract_id) = setup_test_env();
+
+    let verifier = Address::generate(&e);
+
+    // Add verifier
+    e.as_contract(&contract_id, || {
+        AttestationEngineContract::add_verifier(e.clone(), admin.clone(), verifier.clone())
+            .unwrap();
+    });
+
+    // Remove verifier
+    e.as_contract(&contract_id, || {
+        AttestationEngineContract::remove_verifier(e.clone(), admin.clone(), verifier.clone())
+            .unwrap();
+    });
+
+    // Verify verifier is no longer authorized
+    let is_verifier = e.as_contract(&contract_id, || {
+        AttestationEngineContract::is_verifier(e.clone(), verifier.clone())
+    });
+    assert!(!is_verifier);
+}
+
+#[test]
+fn test_attest_unauthorized_caller() {
+    let (e, _admin, _commitment_core, contract_id) = setup_test_env();
+
+    let commitment_id = String::from_str(&e, "test_commitment");
+    let non_verifier = Address::generate(&e);
+    let owner = Address::generate(&e);
+
+    store_core_commitment(
+        &e,
+        &_commitment_core,
+        "test_commitment",
+        &owner,
+        1000,
+        1000,
+        10,
+        30,
+        1000,
     );
 
     let attestation_type = String::from_str(&e, "health_check");
@@ -714,7 +790,8 @@ fn test_attest_authorized_verifier() {
 
     // Add verifier
     e.as_contract(&contract_id, || {
-        AttestationEngineContract::add_verifier(e.clone(), admin.clone(), verifier.clone()).unwrap();
+        AttestationEngineContract::add_verifier(e.clone(), admin.clone(), verifier.clone())
+            .unwrap();
     });
 
     assert_eq!(last_event.0, contract_id);
@@ -914,8 +991,14 @@ fn test_attest_violation_success() {
 
     let attestation_type = String::from_str(&e, "violation");
     let mut data = Map::new(&e);
-    data.set(String::from_str(&e, "violation_type"), String::from_str(&e, "excessive_drawdown"));
-    data.set(String::from_str(&e, "severity"), String::from_str(&e, "high"));
+    data.set(
+        String::from_str(&e, "violation_type"),
+        String::from_str(&e, "excessive_drawdown"),
+    );
+    data.set(
+        String::from_str(&e, "severity"),
+        String::from_str(&e, "high"),
+    );
 
     let result = e.as_contract(&contract_id, || {
         AttestationEngineContract::attest(
@@ -960,7 +1043,10 @@ fn test_attest_fee_generation_success() {
 
     let attestation_type = String::from_str(&e, "fee_generation");
     let mut data = Map::new(&e);
-    data.set(String::from_str(&e, "fee_amount"), String::from_str(&e, "100"));
+    data.set(
+        String::from_str(&e, "fee_amount"),
+        String::from_str(&e, "100"),
+    );
 
     let result = e.as_contract(&contract_id, || {
         AttestationEngineContract::attest(
@@ -998,7 +1084,10 @@ fn test_attest_drawdown_success() {
 
     let attestation_type = String::from_str(&e, "drawdown");
     let mut data = Map::new(&e);
-    data.set(String::from_str(&e, "drawdown_percent"), String::from_str(&e, "5"));
+    data.set(
+        String::from_str(&e, "drawdown_percent"),
+        String::from_str(&e, "5"),
+    );
 
     let result = e.as_contract(&contract_id, || {
         AttestationEngineContract::attest(
@@ -1036,7 +1125,8 @@ fn test_multiple_attestations() {
 
     // Record multiple attestations
     for i in 0..3 {
-        e.ledger().with_mut(|li| li.timestamp = 10000 + (i as u64 * 100));
+        e.ledger()
+            .with_mut(|li| li.timestamp = 10000 + (i as u64 * 100));
         let data = Map::new(&e);
         e.as_contract(&contract_id, || {
             AttestationEngineContract::attest(
@@ -1046,7 +1136,8 @@ fn test_multiple_attestations() {
                 String::from_str(&e, "health_check"),
                 data,
                 true,
-            ).unwrap();
+            )
+            .unwrap();
         });
     }
 
@@ -1097,7 +1188,8 @@ fn test_health_metrics_updated_after_attestation() {
             String::from_str(&e, "health_check"),
             data,
             true,
-        ).unwrap();
+        )
+        .unwrap();
     });
 
     // Check stored health metrics
@@ -1132,8 +1224,14 @@ fn test_compliance_score_decreases_on_violation() {
 
     // Record a high severity violation
     let mut data = Map::new(&e);
-    data.set(String::from_str(&e, "violation_type"), String::from_str(&e, "excessive_drawdown"));
-    data.set(String::from_str(&e, "severity"), String::from_str(&e, "high"));
+    data.set(
+        String::from_str(&e, "violation_type"),
+        String::from_str(&e, "excessive_drawdown"),
+    );
+    data.set(
+        String::from_str(&e, "severity"),
+        String::from_str(&e, "high"),
+    );
 
     e.as_contract(&contract_id, || {
         AttestationEngineContract::attest(
@@ -1143,7 +1241,8 @@ fn test_compliance_score_decreases_on_violation() {
             String::from_str(&e, "violation"),
             data,
             false,
-        ).unwrap();
+        )
+        .unwrap();
     });
 
     // Check stored health metrics - compliance score should be reduced by 30 (high severity)
@@ -1179,7 +1278,10 @@ fn test_fees_accumulated_correctly() {
 
     // Record fee generation
     let mut data = Map::new(&e);
-    data.set(String::from_str(&e, "fee_amount"), String::from_str(&e, "100"));
+    data.set(
+        String::from_str(&e, "fee_amount"),
+        String::from_str(&e, "100"),
+    );
 
     e.as_contract(&contract_id, || {
         AttestationEngineContract::attest(
@@ -1189,13 +1291,17 @@ fn test_fees_accumulated_correctly() {
             String::from_str(&e, "fee_generation"),
             data.clone(),
             true,
-        ).unwrap();
+        )
+        .unwrap();
     });
 
     // Record another fee
     e.ledger().with_mut(|li| li.timestamp = 20000);
     let mut data2 = Map::new(&e);
-    data2.set(String::from_str(&e, "fee_amount"), String::from_str(&e, "50"));
+    data2.set(
+        String::from_str(&e, "fee_amount"),
+        String::from_str(&e, "50"),
+    );
 
     e.as_contract(&contract_id, || {
         AttestationEngineContract::attest(
@@ -1205,7 +1311,8 @@ fn test_fees_accumulated_correctly() {
             String::from_str(&e, "fee_generation"),
             data2,
             true,
-        ).unwrap();
+        )
+        .unwrap();
     });
 
     // Check stored health metrics - fees should be accumulated
@@ -1248,12 +1355,15 @@ fn test_last_attestation_updated() {
             String::from_str(&e, "health_check"),
             data.clone(),
             true,
-        ).unwrap();
+        )
+        .unwrap();
     });
 
-    let metrics1 = e.as_contract(&contract_id, || {
-        AttestationEngineContract::get_stored_health_metrics(e.clone(), commitment_id.clone())
-    }).unwrap();
+    let metrics1 = e
+        .as_contract(&contract_id, || {
+            AttestationEngineContract::get_stored_health_metrics(e.clone(), commitment_id.clone())
+        })
+        .unwrap();
     assert_eq!(metrics1.last_attestation, 10000);
 
     // Record second attestation at time 20000
@@ -1266,12 +1376,15 @@ fn test_last_attestation_updated() {
             String::from_str(&e, "health_check"),
             data.clone(),
             true,
-        ).unwrap();
+        )
+        .unwrap();
     });
 
-    let metrics2 = e.as_contract(&contract_id, || {
-        AttestationEngineContract::get_stored_health_metrics(e.clone(), commitment_id.clone())
-    }).unwrap();
+    let metrics2 = e
+        .as_contract(&contract_id, || {
+            AttestationEngineContract::get_stored_health_metrics(e.clone(), commitment_id.clone())
+        })
+        .unwrap();
     assert_eq!(metrics2.last_attestation, 20000);
 }
 
@@ -1340,7 +1453,13 @@ fn test_attest_event() {
     let attestation_type = String::from_str(&e, "health_check");
     let data = Map::new(&e);
 
-    client.attest(&verified_by, &commitment_id, &attestation_type, &data, &true);
+    client.attest(
+        &verified_by,
+        &commitment_id,
+        &attestation_type,
+        &data,
+        &true,
+    );
 
     let events = e.events().all();
     let last_event = events.last().unwrap();
@@ -1348,8 +1467,126 @@ fn test_attest_event() {
     assert_eq!(last_event.0, contract_id);
     assert_eq!(
         last_event.1,
-        vec![&e, Symbol::new(&e, "AttestationRecorded").into_val(&e), commitment_id.into_val(&e), verified_by.into_val(&e)]
+        vec![
+            &e,
+            Symbol::new(&e, "AttestationRecorded").into_val(&e),
+            commitment_id.into_val(&e),
+            verified_by.into_val(&e)
+        ]
     );
+}
+
+#[test]
+#[should_panic(expected = "Rate limit exceeded")]
+fn test_attest_rate_limit_enforced() {
+    let (e, admin, _commitment_core, contract_id) = setup_test_env();
+
+    let verifier = admin.clone();
+
+    // Configure rate limit: 1 attestation per 60 seconds for function "attest"
+    e.as_contract(&contract_id, || {
+        AttestationEngineContract::set_rate_limit(
+            e.clone(),
+            admin.clone(),
+            Symbol::new(&e, "attest"),
+            60,
+            1,
+        )
+        .unwrap();
+    });
+
+    let commitment_id = String::from_str(&e, "rl_attest");
+    let owner = Address::generate(&e);
+    store_core_commitment(
+        &e,
+        &_commitment_core,
+        "rl_attest",
+        &owner,
+        1000,
+        1000,
+        10,
+        30,
+        1000,
+    );
+
+    let attestation_type = String::from_str(&e, "health_check");
+    let data = Map::new(&e);
+
+    // First attestation should succeed
+    e.as_contract(&contract_id, || {
+        AttestationEngineContract::attest(
+            e.clone(),
+            verifier.clone(),
+            commitment_id.clone(),
+            attestation_type.clone(),
+            data.clone(),
+            true,
+        )
+        .unwrap();
+    });
+
+    // Second attestation within same window should panic
+    e.as_contract(&contract_id, || {
+        let _ = AttestationEngineContract::attest(
+            e.clone(),
+            verifier.clone(),
+            commitment_id.clone(),
+            attestation_type.clone(),
+            data.clone(),
+            true,
+        );
+    });
+}
+
+#[test]
+fn test_protocol_statistics_aggregation() {
+    let (e, admin, _commitment_core, contract_id) = setup_test_env();
+    e.ledger().with_mut(|li| li.timestamp = 10000);
+
+    let commitment_id = String::from_str(&e, "stats_commitment");
+    let owner = Address::generate(&e);
+    store_core_commitment(
+        &e,
+        &_commitment_core,
+        "stats_commitment",
+        &owner,
+        1000,
+        1000,
+        10,
+        30,
+        1000,
+    );
+
+    // Record a fee generation attestation so that fees and counters update
+    let mut data = Map::new(&e);
+    data.set(
+        String::from_str(&e, "fee_amount"),
+        String::from_str(&e, "100"),
+    );
+
+    e.as_contract(&contract_id, || {
+        AttestationEngineContract::attest(
+            e.clone(),
+            admin.clone(),
+            commitment_id.clone(),
+            String::from_str(&e, "fee_generation"),
+            data,
+            true,
+        )
+        .unwrap();
+    });
+
+    let (total_commitments, total_attestations, total_violations, total_fees) = e
+        .as_contract(&contract_id, || {
+            AttestationEngineContract::get_protocol_statistics(e.clone())
+        });
+
+    // We seeded a commitment directly in core storage; protocol stats read the
+    // core's aggregate counter which remains at zero in this isolated test.
+    assert_eq!(total_commitments, 0);
+    assert_eq!(total_attestations, 1);
+    assert_eq!(total_violations, 0);
+    assert_eq!(total_fees, 100);
 }
 
 #[test]
@@ -1371,7 +1608,7 @@ fn test_record_fees_event() {
         30,
         1000,
     );
-    
+
     // record_fees requires caller (admin)
     client.record_fees(&admin, &commitment_id, &100);
 
@@ -1381,7 +1618,11 @@ fn test_record_fees_event() {
     assert_eq!(last_event.0, contract_id);
     assert_eq!(
         last_event.1,
-        vec![&e, Symbol::new(&e, "FeeRecorded").into_val(&e), commitment_id.into_val(&e)]
+        vec![
+            &e,
+            Symbol::new(&e, "FeeRecorded").into_val(&e),
+            commitment_id.into_val(&e)
+        ]
     );
     let event_data: (i128, u64) = last_event.2.into_val(&e);
     assert_eq!(event_data.0, 100);
@@ -1417,7 +1658,11 @@ fn test_record_drawdown_event() {
     assert_eq!(last_event.0, contract_id);
     assert_eq!(
         last_event.1,
-        vec![&e, Symbol::new(&e, "DrawdownRecorded").into_val(&e), commitment_id.into_val(&e)]
+        vec![
+            &e,
+            Symbol::new(&e, "DrawdownRecorded").into_val(&e),
+            commitment_id.into_val(&e)
+        ]
     );
     let event_data: (i128, bool, u64) = last_event.2.into_val(&e);
     // (drawdown_percent, is_compliant, timestamp)

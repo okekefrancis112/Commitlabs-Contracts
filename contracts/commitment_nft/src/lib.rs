@@ -1,4 +1,5 @@
 #![no_std]
+use shared_utils::EmergencyControl;
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, symbol_short, Address, Env, String,
     Symbol, Vec,
@@ -98,7 +99,6 @@ pub enum DataKey {
 }
 
 // Events
-const MINT: soroban_sdk::Symbol = symbol_short!("mint");
 
 #[cfg(test)]
 mod tests;
@@ -195,7 +195,7 @@ impl CommitmentNFTContract {
     ///
     /// # Returns
     /// The token_id of the newly minted NFT
-    /// 
+    ///
     /// # Reentrancy Protection
     /// Uses checks-effects-interactions pattern. This function only writes to storage
     /// and doesn't make external calls, but still protected for consistency.
@@ -211,37 +211,49 @@ impl CommitmentNFTContract {
         early_exit_penalty: u32,
     ) -> Result<u32, ContractError> {
         // Reentrancy protection
-        let guard: bool = e.storage()
+        let guard: bool = e
+            .storage()
             .instance()
             .get(&DataKey::ReentrancyGuard)
             .unwrap_or(false);
-        
+
         if guard {
             return Err(ContractError::ReentrancyDetected);
         }
         e.storage().instance().set(&DataKey::ReentrancyGuard, &true);
+        EmergencyControl::require_not_emergency(&e);
 
         // CHECKS: Verify contract is initialized
         if !e.storage().instance().has(&DataKey::Admin) {
-            e.storage().instance().set(&DataKey::ReentrancyGuard, &false);
+            e.storage()
+                .instance()
+                .set(&DataKey::ReentrancyGuard, &false);
             return Err(ContractError::NotInitialized);
         }
 
         // Validate inputs
         if duration_days == 0 {
-            e.storage().instance().set(&DataKey::ReentrancyGuard, &false);
+            e.storage()
+                .instance()
+                .set(&DataKey::ReentrancyGuard, &false);
             return Err(ContractError::InvalidDuration);
         }
         if max_loss_percent > 100 {
-            e.storage().instance().set(&DataKey::ReentrancyGuard, &false);
+            e.storage()
+                .instance()
+                .set(&DataKey::ReentrancyGuard, &false);
             return Err(ContractError::InvalidMaxLoss);
         }
         if !Self::is_valid_commitment_type(&e, &commitment_type) {
-            e.storage().instance().set(&DataKey::ReentrancyGuard, &false);
+            e.storage()
+                .instance()
+                .set(&DataKey::ReentrancyGuard, &false);
             return Err(ContractError::InvalidCommitmentType);
         }
         if initial_amount <= 0 {
-            e.storage().instance().set(&DataKey::ReentrancyGuard, &false);
+            e.storage()
+                .instance()
+                .set(&DataKey::ReentrancyGuard, &false);
             return Err(ContractError::InvalidAmount);
         }
 
@@ -318,7 +330,9 @@ impl CommitmentNFTContract {
         e.storage().instance().set(&DataKey::TokenIds, &token_ids);
 
         // Clear reentrancy guard
-        e.storage().instance().set(&DataKey::ReentrancyGuard, &false);
+        e.storage()
+            .instance()
+            .set(&DataKey::ReentrancyGuard, &false);
 
         // Emit mint event
         e.events().publish(
@@ -353,21 +367,28 @@ impl CommitmentNFTContract {
     }
 
     /// Transfer NFT to new owner
-    /// 
+    ///
     /// # Reentrancy Protection
     /// Uses checks-effects-interactions pattern. This function only writes to storage
     /// and doesn't make external calls, but still protected for consistency.
-    pub fn transfer(e: Env, from: Address, to: Address, token_id: u32) -> Result<(), ContractError> {
+    pub fn transfer(
+        e: Env,
+        from: Address,
+        to: Address,
+        token_id: u32,
+    ) -> Result<(), ContractError> {
         // Reentrancy protection
-        let guard: bool = e.storage()
+        let guard: bool = e
+            .storage()
             .instance()
             .get(&DataKey::ReentrancyGuard)
             .unwrap_or(false);
-        
+
         if guard {
             return Err(ContractError::ReentrancyDetected);
         }
         e.storage().instance().set(&DataKey::ReentrancyGuard, &true);
+        EmergencyControl::require_not_emergency(&e);
 
         // CHECKS: Require authorization from the sender
         from.require_auth();
@@ -378,13 +399,17 @@ impl CommitmentNFTContract {
             .persistent()
             .get(&DataKey::NFT(token_id))
             .ok_or_else(|| {
-                e.storage().instance().set(&DataKey::ReentrancyGuard, &false);
+                e.storage()
+                    .instance()
+                    .set(&DataKey::ReentrancyGuard, &false);
                 ContractError::TokenNotFound
             })?;
 
         // Verify ownership
         if nft.owner != from {
-            e.storage().instance().set(&DataKey::ReentrancyGuard, &false);
+            e.storage()
+                .instance()
+                .set(&DataKey::ReentrancyGuard, &false);
             return Err(ContractError::NotOwner);
         }
 
@@ -401,23 +426,27 @@ impl CommitmentNFTContract {
         nft.owner = to.clone();
         e.storage().persistent().set(&DataKey::NFT(token_id), &nft);
 
+        // OPTIMIZATION: Batch read balances before updating
+        let (from_balance, to_balance) = {
+            let from_bal = e
+                .storage()
+                .persistent()
+                .get(&DataKey::OwnerBalance(from.clone()))
+                .unwrap_or(0u32);
+            let to_bal = e
+                .storage()
+                .persistent()
+                .get(&DataKey::OwnerBalance(to.clone()))
+                .unwrap_or(0u32);
+            (from_bal, to_bal)
+        };
+
         // Update balance counts
-        let from_balance: u32 = e
-            .storage()
-            .persistent()
-            .get(&DataKey::OwnerBalance(from.clone()))
-            .unwrap_or(0);
         if from_balance > 0 {
             e.storage()
                 .persistent()
                 .set(&DataKey::OwnerBalance(from.clone()), &(from_balance - 1));
         }
-
-        let to_balance: u32 = e
-            .storage()
-            .persistent()
-            .get(&DataKey::OwnerBalance(to.clone()))
-            .unwrap_or(0);
         e.storage()
             .persistent()
             .set(&DataKey::OwnerBalance(to.clone()), &(to_balance + 1));
@@ -446,7 +475,9 @@ impl CommitmentNFTContract {
             .set(&DataKey::OwnerTokens(to.clone()), &to_tokens);
 
         // Clear reentrancy guard
-        e.storage().instance().set(&DataKey::ReentrancyGuard, &false);
+        e.storage()
+            .instance()
+            .set(&DataKey::ReentrancyGuard, &false);
 
         // Emit transfer event
         e.events().publish(
@@ -535,21 +566,23 @@ impl CommitmentNFTContract {
     // ========================================================================
 
     /// Mark NFT as settled (after maturity)
-    /// 
+    ///
     /// # Reentrancy Protection
     /// Uses checks-effects-interactions pattern. This function only writes to storage
     /// and doesn't make external calls, but still protected for consistency.
     pub fn settle(e: Env, token_id: u32) -> Result<(), ContractError> {
         // Reentrancy protection
-        let guard: bool = e.storage()
+        let guard: bool = e
+            .storage()
             .instance()
             .get(&DataKey::ReentrancyGuard)
             .unwrap_or(false);
-        
+
         if guard {
             return Err(ContractError::ReentrancyDetected);
         }
         e.storage().instance().set(&DataKey::ReentrancyGuard, &true);
+        EmergencyControl::require_not_emergency(&e);
 
         // CHECKS: Get the NFT
         let mut nft: CommitmentNFT = e
@@ -557,20 +590,26 @@ impl CommitmentNFTContract {
             .persistent()
             .get(&DataKey::NFT(token_id))
             .ok_or_else(|| {
-                e.storage().instance().set(&DataKey::ReentrancyGuard, &false);
+                e.storage()
+                    .instance()
+                    .set(&DataKey::ReentrancyGuard, &false);
                 ContractError::TokenNotFound
             })?;
 
         // Check if already settled
         if !nft.is_active {
-            e.storage().instance().set(&DataKey::ReentrancyGuard, &false);
+            e.storage()
+                .instance()
+                .set(&DataKey::ReentrancyGuard, &false);
             return Err(ContractError::AlreadySettled);
         }
 
         // Verify the commitment has expired
         let current_time = e.ledger().timestamp();
         if current_time < nft.metadata.expires_at {
-            e.storage().instance().set(&DataKey::ReentrancyGuard, &false);
+            e.storage()
+                .instance()
+                .set(&DataKey::ReentrancyGuard, &false);
             return Err(ContractError::NotExpired);
         }
 
@@ -580,7 +619,9 @@ impl CommitmentNFTContract {
         e.storage().persistent().set(&DataKey::NFT(token_id), &nft);
 
         // Clear reentrancy guard
-        e.storage().instance().set(&DataKey::ReentrancyGuard, &false);
+        e.storage()
+            .instance()
+            .set(&DataKey::ReentrancyGuard, &false);
 
         // Emit settle event
         e.events()
@@ -605,4 +646,24 @@ impl CommitmentNFTContract {
     pub fn token_exists(e: Env, token_id: u32) -> bool {
         e.storage().persistent().has(&DataKey::NFT(token_id))
     }
+
+    /// Set emergency mode (admin only)
+    pub fn set_emergency_mode(e: Env, caller: Address, enabled: bool) -> Result<(), ContractError> {
+        let admin: Address = e
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(ContractError::NotInitialized)?;
+        admin.require_auth();
+
+        if caller != admin {
+            return Err(ContractError::NotAuthorized);
+        }
+
+        EmergencyControl::set_emergency_mode(&e, enabled);
+        Ok(())
+    }
 }
+
+#[cfg(all(test, feature = "benchmark"))]
+mod benchmarks;

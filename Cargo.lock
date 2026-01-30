@@ -21,6 +21,7 @@ checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 name = "allocation_logic"
 version = "0.1.0"
 dependencies = [
+ "shared_utils",
  "soroban-sdk",
 ]
 
@@ -47,6 +48,7 @@ name = "attestation_engine"
 version = "0.1.0"
 dependencies = [
  "commitment_core",
+ "shared_utils",
  "soroban-sdk",
 ]
 
@@ -165,9 +167,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "commitment_interface"
+version = "0.1.0"
+dependencies = [
+ "soroban-sdk",
+]
+
+[[package]]
 name = "commitment_nft"
 version = "0.1.0"
 dependencies = [
+ "shared_utils",
+ "soroban-sdk",
+]
+
+[[package]]
+name = "commitment_transformation"
+version = "0.1.0"
+dependencies = [
+ "shared_utils",
  "soroban-sdk",
 ]
 
@@ -820,6 +838,14 @@ checksum = "479ca8adacdd7ce8f1fb39ce9ecccbfe93a3f1344b3d0d97f20bc0196208f62b"
 dependencies = [
  "proc-macro2",
  "syn",
+]
+
+[[package]]
+name = "price_oracle"
+version = "0.1.0"
+dependencies = [
+ "shared_utils",
+ "soroban-sdk",
 ]
 
 [[package]]
