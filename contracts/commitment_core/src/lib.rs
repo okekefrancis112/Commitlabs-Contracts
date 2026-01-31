@@ -88,6 +88,7 @@ pub struct CommitmentCreatedEvent {
     pub timestamp: u64,
 }
 
+
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CommitmentRules {
@@ -332,6 +333,22 @@ fn transfer_assets(e: &Env, from: &Address, to: &Address, asset_address: &Addres
     token_client.transfer(from, to, &amount);
 }
 
+
+// Error types for better error handling
+#[contracterror]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u32)]
+pub enum CommitmentError {
+    NotFound = 1,
+    AlreadySettled = 2,
+    NotExpired = 3,
+    Unauthorized = 4,
+    InvalidRules = 5,
+    InsufficientBalance = 6,
+    TransferFailed = 7,
+    InvalidAmount = 8,
+    AssetNotFound = 9,
+
 /// Helper function to call NFT contract mint function
 fn call_nft_mint(
     e: &Env,
@@ -358,6 +375,7 @@ fn call_nft_mint(
     // In Soroban, contract calls return the value directly
     // Failures cause the entire transaction to fail
     e.invoke_contract::<u32>(nft_contract, &Symbol::new(e, "mint"), args)
+
 }
 
 // Storage helpers
@@ -544,6 +562,7 @@ fn require_valid_wasm_hash(e: &Env, wasm_hash: &BytesN<32>) {
 #[contract]
 pub struct CommitmentCoreContract;
 
+
 #[contractimpl]
 impl CommitmentCoreContract {
     /// Validate commitment rules using shared utilities
@@ -626,6 +645,14 @@ impl CommitmentCoreContract {
         // TODO: Store admin and NFT contract address
         // TODO: Initialize storage
     pub fn initialize(e: Env, admin: Address, nft_contract: Address) {
+
+        // Store admin
+        e.storage().instance().set(&admin_key(&e), &admin);
+        // Store NFT contract address
+        e.storage()
+            .instance()
+            .set(&nft_contract_key(&e), &nft_contract);
+
         // Check if already initialized
         if e.storage().instance().has(&DataKey::Admin) {
             fail(&e, CommitmentError::AlreadyInitialized, "initialize");
@@ -699,6 +726,44 @@ impl CommitmentCoreContract {
         amount: i128,
         asset_address: Address,
         rules: CommitmentRules,
+
+    ) -> Result<String, CommitmentError> {
+        // Require authorization from owner
+        owner.require_auth();
+
+        // Validate rules
+        if rules.duration_days == 0 {
+            return Err(CommitmentError::InvalidRules);
+        }
+        if rules.max_loss_percent > 100 {
+            return Err(CommitmentError::InvalidRules);
+        }
+        if amount <= 0 {
+            return Err(CommitmentError::InvalidAmount);
+        }
+
+        // Verify user has sufficient balance
+        verify_sufficient_balance(&e, &asset_address, &owner, amount)?;
+
+        // Transfer assets from owner to contract
+        transfer_from_user_to_contract(&e, &asset_address, &owner, amount);
+
+        // Generate unique commitment ID based on timestamp
+        let timestamp = e.ledger().timestamp();
+        let commitment_id = String::from_str(&e, "commitment_");
+        // In production, would append timestamp/hash for uniqueness
+
+        // Calculate expiration
+        let duration_seconds = (rules.duration_days as u64) * 24 * 60 * 60;
+        let expires_at = timestamp + duration_seconds;
+
+        // Get NFT contract and mint NFT
+        let nft_contract: Address = e.storage().instance().get(&nft_contract_key(&e)).unwrap();
+        let nft_token_id: u32 = 1; // This will be returned from NFT contract mint call
+                                   // TODO: Call NFT contract to mint (requires cross-contract call implementation)
+
+        // Create commitment
+
     ) -> String {
         // Reentrancy protection
         require_no_reentrancy(&e);
