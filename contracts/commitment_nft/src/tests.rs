@@ -3,7 +3,11 @@
 extern crate std;
 
 use crate::*;
-use soroban_sdk::{testutils::Address as _, testutils::Ledger, Address, Env, String};
+use soroban_sdk::{
+    symbol_short,
+    testutils::{Address as _, Events, Ledger},
+    vec, Address, Env, IntoVal, String,
+};
 
 fn setup_contract(e: &Env) -> (Address, CommitmentNFTContractClient<'_>) {
     let contract_id = e.register_contract(None, CommitmentNFTContract);
@@ -12,15 +16,18 @@ fn setup_contract(e: &Env) -> (Address, CommitmentNFTContractClient<'_>) {
     (admin, client)
 }
 
-fn create_test_metadata(e: &Env, asset_address: &Address) -> (String, u32, u32, String, i128, Address, u32) {
+fn create_test_metadata(
+    e: &Env,
+    asset_address: &Address,
+) -> (String, u32, u32, String, i128, Address, u32) {
     (
         String::from_str(e, "commitment_001"),
-        30,   // duration_days
-        10,   // max_loss_percent
+        30, // duration_days
+        10, // max_loss_percent
         String::from_str(e, "balanced"),
         1000, // initial_amount
         asset_address.clone(),
-        5,    // early_exit_penalty
+        5, // early_exit_penalty
     )
 }
 
@@ -46,7 +53,7 @@ fn setup_env() -> (Env, Address, Address) {
 
         // Verify total supply is 0
         assert_eq!(client.total_supply(), 0);
-        
+
         (admin, client.address)
     };
 
@@ -97,6 +104,23 @@ fn test_mint() {
     assert_eq!(token_id, 0);
     assert_eq!(client.total_supply(), 1);
     assert_eq!(client.balance_of(&owner), 1);
+
+    // Verify Mint event
+    let events = e.events().all();
+    let last_event = events.last().unwrap();
+
+    assert_eq!(last_event.0, client.address);
+    assert_eq!(
+        last_event.1,
+        vec![
+            &e,
+            symbol_short!("Mint").into_val(&e),
+            token_id.into_val(&e),
+            owner.into_val(&e)
+        ]
+    );
+    let data: (String, u64) = last_event.2.into_val(&e);
+    assert_eq!(data.0, commitment_id);
 }
 
 #[test]
@@ -225,7 +249,6 @@ fn test_get_metadata_nonexistent_token() {
     // Try to get metadata for non-existent token
     client.get_metadata(&999);
 }
-
 
 // ============================================
 // owner_of Tests
@@ -528,7 +551,7 @@ fn test_get_nfts_by_owner() {
 
 #[test]
 fn test_owner_of_not_found() {
-    let (e, contract_id, admin) = setup_env();
+    let (e, contract_id, _admin) = setup_env();
     let client = CommitmentNFTContractClient::new(&e, &contract_id);
 
     let result = client.try_owner_of(&999);
@@ -577,6 +600,23 @@ fn test_transfer() {
     assert_eq!(client.owner_of(&token_id), owner2);
     assert_eq!(client.balance_of(&owner1), 0);
     assert_eq!(client.balance_of(&owner2), 1);
+
+    // Verify Transfer event
+    let events = e.events().all();
+    let last_event = events.last().unwrap();
+
+    assert_eq!(last_event.0, client.address);
+    assert_eq!(
+        last_event.1,
+        vec![
+            &e,
+            symbol_short!("Transfer").into_val(&e),
+            owner1.into_val(&e),
+            owner2.into_val(&e)
+        ]
+    );
+    let data: (u32, u64) = last_event.2.into_val(&e);
+    assert_eq!(data.0, token_id);
 }
 
 #[test]
@@ -667,6 +707,22 @@ fn test_settle() {
 
     // NFT should now be inactive
     assert_eq!(client.is_active(&token_id), false);
+
+    // Verify Settle event
+    let events = e.events().all();
+    let last_event = events.last().unwrap();
+
+    assert_eq!(last_event.0, client.address);
+    assert_eq!(
+        last_event.1,
+        vec![
+            &e,
+            symbol_short!("Settle").into_val(&e),
+            token_id.into_val(&e)
+        ]
+    );
+    let data: u64 = last_event.2.into_val(&e);
+    assert_eq!(data, e.ledger().timestamp());
 }
 
 #[test]
@@ -720,11 +776,8 @@ fn test_settle_already_settled() {
         li.timestamp = 172800;
     });
 
-    // First settle should succeed
     client.settle(&token_id);
-
-    // Second settle should fail
-    client.settle(&token_id);
+    client.settle(&token_id); // Should fail
 }
 
 // ============================================
