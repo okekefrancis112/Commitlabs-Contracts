@@ -60,6 +60,42 @@ fn setup_env() -> (Env, Address, Address) {
     (e, contract_id, admin)
 }
 
+/// Asserts that the sum of `balance_of` for all given owners equals `total_supply()`.
+fn assert_balance_supply_invariant(
+    client: &CommitmentNFTContractClient,
+    owners: &[&Address],
+) {
+    let sum: u32 = owners.iter().map(|addr| client.balance_of(addr)).sum();
+    assert_eq!(
+        sum,
+        client.total_supply(),
+        "INV-2 violated: sum of balances ({}) != total_supply ({})",
+        sum,
+        client.total_supply()
+    );
+}
+
+/// Convenience wrapper that mints a 1-day duration NFT with default params.
+/// Returns the token_id.
+fn mint_to_owner(
+    e: &Env,
+    client: &CommitmentNFTContractClient,
+    owner: &Address,
+    asset_address: &Address,
+    label: &str,
+) -> u32 {
+    client.mint(
+        owner,
+        &String::from_str(e, label),
+        &1, // 1 day duration — easy to settle
+        &10,
+        &String::from_str(e, "balanced"),
+        &1000,
+        asset_address,
+        &5,
+    )
+}
+
 // ============================================================================
 // Initialization Tests
 // ============================================================================
@@ -1186,7 +1222,7 @@ fn test_unpause_restores_transfer() {
     let token_id = client.mint(
         &owner1,
         &String::from_str(&e, "commitment_002"),
-        &30,
+        &1, // 1 day duration so we can settle
         &10,
         &String::from_str(&e, "balanced"),
         &1000,
@@ -1194,9 +1230,340 @@ fn test_unpause_restores_transfer() {
         &5,
     );
 
+    // Settle the NFT so it can be transferred
+    e.ledger().with_mut(|li| {
+        li.timestamp = 172800; // 2 days
+    });
+    client.settle(&token_id);
+
     client.pause();
     client.unpause();
 
     client.transfer(&owner1, &owner2, &token_id);
     assert_eq!(client.owner_of(&token_id), owner2);
+}
+
+// ============================================================================
+// Balance / Supply Invariant Tests
+// ============================================================================
+//
+// Formally documented invariants:
+//
+// INV-1 (Supply Monotonicity):
+//   `total_supply()` equals the number of successful mints and is never
+//   decremented. Neither `settle()` nor `transfer()` changes the counter.
+//
+// INV-2 (Balance-Supply Conservation):
+//   sum(balance_of(addr) for all owners) == total_supply()
+//   Relies on the ownership check at L534 guaranteeing from_balance >= 1 on
+//   transfer, so the conditional decrement at L570 is always taken.
+//
+// INV-3 (Settle Independence):
+//   `settle()` does not change `total_supply()` or any `balance_of()`.
+//   It only flips `nft.is_active` to false.
+//
+// INV-4 (Transfer Conservation):
+//   `transfer()` decreases the sender's balance by 1, increases the
+//   receiver's balance by 1, and leaves `total_supply()` unchanged.
+// ============================================================================
+
+#[test]
+fn test_invariant_balance_sum_equals_supply_after_mints() {
+    let e = Env::default();
+    e.mock_all_auths();
+
+    let (admin, client) = setup_contract(&e);
+    let asset = Address::generate(&e);
+
+    let owner_a = Address::generate(&e);
+    let owner_b = Address::generate(&e);
+    let owner_c = Address::generate(&e);
+    let owner_d = Address::generate(&e);
+    let owners: [&Address; 4] = [&owner_a, &owner_b, &owner_c, &owner_d];
+
+    client.initialize(&admin);
+
+    // Base case: empty state
+    assert_eq!(client.total_supply(), 0);
+    assert_balance_supply_invariant(&client, &owners);
+
+    // Mint 4 to owner_a
+    for i in 0..4 {
+        mint_to_owner(&e, &client, &owner_a, &asset, &std::format!("a_{i}"));
+        assert_balance_supply_invariant(&client, &owners);
+    }
+
+    // Mint 1 to owner_b
+    mint_to_owner(&e, &client, &owner_b, &asset, "b_0");
+    assert_balance_supply_invariant(&client, &owners);
+
+    // Mint 3 to owner_c
+    for i in 0..3 {
+        mint_to_owner(&e, &client, &owner_c, &asset, &std::format!("c_{i}"));
+        assert_balance_supply_invariant(&client, &owners);
+    }
+
+    // Mint 2 to owner_d
+    for i in 0..2 {
+        mint_to_owner(&e, &client, &owner_d, &asset, &std::format!("d_{i}"));
+        assert_balance_supply_invariant(&client, &owners);
+    }
+
+    // Final state: 4+1+3+2 = 10
+    assert_eq!(client.total_supply(), 10);
+    assert_eq!(client.balance_of(&owner_a), 4);
+    assert_eq!(client.balance_of(&owner_b), 1);
+    assert_eq!(client.balance_of(&owner_c), 3);
+    assert_eq!(client.balance_of(&owner_d), 2);
+    assert_balance_supply_invariant(&client, &owners);
+}
+
+#[test]
+fn test_invariant_supply_unchanged_after_settle() {
+    let e = Env::default();
+    e.mock_all_auths();
+
+    let (admin, client) = setup_contract(&e);
+    let owner = Address::generate(&e);
+    let asset = Address::generate(&e);
+
+    client.initialize(&admin);
+
+    // Mint 3 NFTs (1-day duration)
+    let t0 = mint_to_owner(&e, &client, &owner, &asset, "s_0");
+    let t1 = mint_to_owner(&e, &client, &owner, &asset, "s_1");
+    let t2 = mint_to_owner(&e, &client, &owner, &asset, "s_2");
+
+    let supply_before = client.total_supply();
+    let balance_before = client.balance_of(&owner);
+    assert_eq!(supply_before, 3);
+    assert_eq!(balance_before, 3);
+
+    // Fast-forward past expiration
+    e.ledger().with_mut(|li| {
+        li.timestamp = 172800; // 2 days
+    });
+
+    // Settle each — supply and balance must not change
+    for token_id in [t0, t1, t2] {
+        client.settle(&token_id);
+        assert_eq!(client.total_supply(), supply_before);
+        assert_eq!(client.balance_of(&owner), balance_before);
+    }
+}
+
+#[test]
+fn test_invariant_balance_unchanged_after_settle_multi_owner() {
+    let e = Env::default();
+    e.mock_all_auths();
+
+    let (admin, client) = setup_contract(&e);
+    let asset = Address::generate(&e);
+
+    let alice = Address::generate(&e);
+    let bob = Address::generate(&e);
+    let carol = Address::generate(&e);
+    let owners: [&Address; 3] = [&alice, &bob, &carol];
+
+    client.initialize(&admin);
+
+    // Alice: 2, Bob: 2, Carol: 1 => 5 total
+    let a0 = mint_to_owner(&e, &client, &alice, &asset, "a0");
+    let _a1 = mint_to_owner(&e, &client, &alice, &asset, "a1");
+    let b0 = mint_to_owner(&e, &client, &bob, &asset, "b0");
+    let b1 = mint_to_owner(&e, &client, &bob, &asset, "b1");
+    let _c0 = mint_to_owner(&e, &client, &carol, &asset, "c0");
+
+    assert_eq!(client.total_supply(), 5);
+    assert_balance_supply_invariant(&client, &owners);
+
+    // Fast-forward past expiration
+    e.ledger().with_mut(|li| {
+        li.timestamp = 172800;
+    });
+
+    // Partial settle: only a0, b0, b1
+    for token_id in [a0, b0, b1] {
+        client.settle(&token_id);
+    }
+
+    // All balances and supply unchanged
+    assert_eq!(client.balance_of(&alice), 2);
+    assert_eq!(client.balance_of(&bob), 2);
+    assert_eq!(client.balance_of(&carol), 1);
+    assert_eq!(client.total_supply(), 5);
+    assert_balance_supply_invariant(&client, &owners);
+}
+
+#[test]
+fn test_invariant_transfer_balance_conservation() {
+    let e = Env::default();
+    e.mock_all_auths();
+
+    let (admin, client) = setup_contract(&e);
+    let asset = Address::generate(&e);
+
+    let from = Address::generate(&e);
+    let to = Address::generate(&e);
+    let owners: [&Address; 2] = [&from, &to];
+
+    client.initialize(&admin);
+
+    // Mint 3 to `from`, 1 to `to`
+    let t0 = mint_to_owner(&e, &client, &from, &asset, "f0");
+    let _t1 = mint_to_owner(&e, &client, &from, &asset, "f1");
+    let _t2 = mint_to_owner(&e, &client, &from, &asset, "f2");
+    let _t3 = mint_to_owner(&e, &client, &to, &asset, "to0");
+
+    assert_eq!(client.total_supply(), 4);
+    assert_balance_supply_invariant(&client, &owners);
+
+    // Settle t0 so it can be transferred
+    e.ledger().with_mut(|li| {
+        li.timestamp = 172800;
+    });
+    client.settle(&t0);
+
+    let supply_before = client.total_supply();
+    let from_bal_before = client.balance_of(&from);
+    let to_bal_before = client.balance_of(&to);
+
+    // Transfer t0: from -> to
+    client.transfer(&from, &to, &t0);
+
+    // INV-4: sender -1, receiver +1, supply unchanged
+    assert_eq!(client.balance_of(&from), from_bal_before - 1);
+    assert_eq!(client.balance_of(&to), to_bal_before + 1);
+    assert_eq!(client.total_supply(), supply_before);
+    // INV-2: sum still equals supply
+    assert_balance_supply_invariant(&client, &owners);
+}
+
+#[test]
+fn test_invariant_complex_mint_settle_transfer_scenario() {
+    let e = Env::default();
+    e.mock_all_auths();
+
+    let (admin, client) = setup_contract(&e);
+    let asset = Address::generate(&e);
+
+    let alice = Address::generate(&e);
+    let bob = Address::generate(&e);
+    let carol = Address::generate(&e);
+    let owners: [&Address; 3] = [&alice, &bob, &carol];
+
+    client.initialize(&admin);
+
+    // --- Phase 1: Mint 6 NFTs ---
+    // Alice: 3, Bob: 2, Carol: 1
+    let a0 = mint_to_owner(&e, &client, &alice, &asset, "a0");
+    let a1 = mint_to_owner(&e, &client, &alice, &asset, "a1");
+    let a2 = mint_to_owner(&e, &client, &alice, &asset, "a2");
+    let b0 = mint_to_owner(&e, &client, &bob, &asset, "b0");
+    let b1 = mint_to_owner(&e, &client, &bob, &asset, "b1");
+    let c0 = mint_to_owner(&e, &client, &carol, &asset, "c0");
+
+    assert_eq!(client.total_supply(), 6);
+    assert_balance_supply_invariant(&client, &owners);
+
+    // --- Phase 2: Settle 4 of 6 ---
+    e.ledger().with_mut(|li| {
+        li.timestamp = 172800;
+    });
+
+    for token_id in [a0, a1, b0, c0] {
+        client.settle(&token_id);
+    }
+
+    // INV-3: supply and balances unchanged
+    assert_eq!(client.total_supply(), 6);
+    assert_eq!(client.balance_of(&alice), 3);
+    assert_eq!(client.balance_of(&bob), 2);
+    assert_eq!(client.balance_of(&carol), 1);
+    assert_balance_supply_invariant(&client, &owners);
+
+    // --- Phase 3: Transfer 3 settled NFTs ---
+    // a0: alice -> bob
+    client.transfer(&alice, &bob, &a0);
+    assert_balance_supply_invariant(&client, &owners);
+
+    // a1: alice -> carol
+    client.transfer(&alice, &carol, &a1);
+    assert_balance_supply_invariant(&client, &owners);
+
+    // b0: bob -> carol
+    client.transfer(&bob, &carol, &b0);
+    assert_balance_supply_invariant(&client, &owners);
+
+    assert_eq!(client.total_supply(), 6);
+    assert_eq!(client.balance_of(&alice), 1); // had 3, transferred 2
+    assert_eq!(client.balance_of(&bob), 2);   // had 2, received 1, transferred 1
+    assert_eq!(client.balance_of(&carol), 3); // had 1, received 2
+
+    // --- Phase 4: Settle remaining active NFTs ---
+    for token_id in [a2, b1] {
+        client.settle(&token_id);
+    }
+    assert_eq!(client.total_supply(), 6);
+    assert_balance_supply_invariant(&client, &owners);
+
+    // --- Phase 5: Mint 2 more (still active, no settle) ---
+    mint_to_owner(&e, &client, &alice, &asset, "a3");
+    mint_to_owner(&e, &client, &bob, &asset, "b2");
+
+    assert_eq!(client.total_supply(), 8);
+    assert_eq!(client.balance_of(&alice), 2);
+    assert_eq!(client.balance_of(&bob), 3);
+    assert_eq!(client.balance_of(&carol), 3);
+    assert_balance_supply_invariant(&client, &owners);
+}
+
+#[test]
+fn test_invariant_transfer_chain_preserves_supply() {
+    let e = Env::default();
+    e.mock_all_auths();
+
+    let (admin, client) = setup_contract(&e);
+    let asset = Address::generate(&e);
+
+    let a = Address::generate(&e);
+    let b = Address::generate(&e);
+    let c = Address::generate(&e);
+    let d = Address::generate(&e);
+    let owners: [&Address; 4] = [&a, &b, &c, &d];
+
+    client.initialize(&admin);
+
+    // Single token, chain: A -> B -> C -> D
+    let token = mint_to_owner(&e, &client, &a, &asset, "chain");
+
+    assert_eq!(client.total_supply(), 1);
+    assert_balance_supply_invariant(&client, &owners);
+
+    // Settle so we can transfer
+    e.ledger().with_mut(|li| {
+        li.timestamp = 172800;
+    });
+    client.settle(&token);
+
+    // A -> B
+    client.transfer(&a, &b, &token);
+    assert_eq!(client.total_supply(), 1);
+    assert_balance_supply_invariant(&client, &owners);
+    assert_eq!(client.balance_of(&a), 0);
+    assert_eq!(client.balance_of(&b), 1);
+
+    // B -> C
+    client.transfer(&b, &c, &token);
+    assert_eq!(client.total_supply(), 1);
+    assert_balance_supply_invariant(&client, &owners);
+    assert_eq!(client.balance_of(&b), 0);
+    assert_eq!(client.balance_of(&c), 1);
+
+    // C -> D
+    client.transfer(&c, &d, &token);
+    assert_eq!(client.total_supply(), 1);
+    assert_balance_supply_invariant(&client, &owners);
+    assert_eq!(client.balance_of(&c), 0);
+    assert_eq!(client.balance_of(&d), 1);
 }
