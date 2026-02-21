@@ -1,6 +1,9 @@
 #![no_std]
-use soroban_sdk::{contract, contractimpl, contracttype, contracterror, symbol_short, Address, Env, String, Vec, Symbol};
-use shared_utils::Pausable;
+use soroban_sdk::{contract, contractimpl, contracttype, contracterror, symbol_short, Address, BytesN, Env, String, Vec, Symbol};
+use shared_utils::{EmergencyControl, Pausable};
+
+/// Current storage/contract version for migrations
+const CURRENT_VERSION: u32 = 1;
 
 // ============================================================================
 // Error Types
@@ -711,6 +714,31 @@ impl CommitmentNFTContract {
 
         // Check if contract is paused
         Pausable::require_not_paused(&e);
+
+        // Access control (Issue #108): only the authorized commitment_core contract or admin may call settle.
+        // Admin is allowed for emergency or operational settlement when core is unavailable.
+        let core_contract: Address = e
+            .storage()
+            .instance()
+            .get(&DataKey::CoreContract)
+            .ok_or_else(|| {
+                e.storage()
+                    .instance()
+                    .set(&DataKey::ReentrancyGuard, &false);
+                ContractError::NotInitialized
+            })?;
+        let invoker = e.invoker();
+        let admin: Address = e
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(ContractError::NotInitialized)?;
+        if invoker != core_contract && invoker != admin {
+            e.storage()
+                .instance()
+                .set(&DataKey::ReentrancyGuard, &false);
+            return Err(ContractError::NotAuthorized);
+        }
 
         // CHECKS: Get the NFT
         let mut nft: CommitmentNFT = e
