@@ -5,8 +5,8 @@ use commitment_core::{
     Commitment as CoreCommitment, CommitmentRules as CoreCommitmentRules, DataKey,
 };
 use soroban_sdk::{
-    contract, contractimpl, contracttype, symbol_short, testutils::Address as _,
-    testutils::Events, testutils::Ledger as _, vec, Address, Env, IntoVal, Map, String, Symbol,
+    contract, contractimpl, contracttype, symbol_short, testutils::Address as _, testutils::Events,
+    testutils::Ledger as _, vec, Address, Env, IntoVal, Map, String, Symbol,
 };
 
 /// Mock core contract for tests: stores commitments and violations, implements get_commitment.
@@ -243,8 +243,13 @@ fn test_verify_compliance() {
         MockCoreContract::set_violations(e.clone(), commitment_id.clone(), false);
     });
     e.as_contract(&_contract_id, || {
-        AttestationEngineContract::record_fees(e.clone(), admin.clone(), commitment_id.clone(), 100)
-            .unwrap();
+        AttestationEngineContract::record_fees(
+            e.clone(),
+            admin.clone(),
+            commitment_id.clone(),
+            100,
+        )
+        .unwrap();
     });
 
     assert!(e.as_contract(&_contract_id, || {
