@@ -1,5 +1,4 @@
 #![no_std]
-use shared_utils::RateLimiter;
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, symbol_short, token, Address, Env, IntoVal,
     Map, String, Symbol, TryIntoVal, Val, Vec,
@@ -124,35 +123,6 @@ pub struct Commitment {
     pub expires_at: u64,
     pub current_value: i128,
     pub status: String, // "active", "settled", "violated", "early_exit"
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum DataKey {
-    Admin,
-    CommitmentCore,
-    HealthState(String),
-    Attestations(String),
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct HealthState {
-    pub fees_generated: i128,
-    pub volatility_exposure: i128,
-    pub last_attestation: u64,
-    pub compliance_score: u32, // 0-100; 0 means "unknown / not calculated"
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Attestation {
-    pub commitment_id: String,
-    pub timestamp: u64,
-    pub attestation_type: String, // "health_check", "violation", "fee_generation", "drawdown"
-    pub data: Map<String, String>, // Flexible data structure
-    pub is_compliant: bool,
-    pub verified_by: Address,
 }
 
 // Import Commitment types from commitment_core (define locally for cross-contract calls)
@@ -1034,47 +1004,8 @@ fn is_authorized_verifier(e: &Env, address: &Address) -> bool {
             Self::i128_to_string(&e, fee_amount),
         );
 
-        // Call attest with fee_generation type
-        Self::attest(
-            e.clone(),
-            caller,
-            commitment_id.clone(),
-            String::from_str(&e, "fee_generation"),
-            data,
-            timestamp: e.ledger().timestamp(),
-            verified_by: caller.clone(),
-            is_compliant: true,
-        };
-
-        // Store attestation
-        let atts_key = (symbol_short!("ATTS"), commitment_id.clone());
-        let mut attestations: Vec<Attestation> = e
-            .storage()
-            .persistent()
-            .get(&atts_key)
-            .unwrap_or_else(|| Vec::new(&e));
-        attestations.push_back(attestation);
-        e.storage().persistent().set(&atts_key, &attestations);
-        
-        // Recalculate compliance score (may call external contract)
-        metrics.compliance_score = Self::calculate_compliance_score(e.clone(), commitment_id.clone());
-        
-        // Update last attestation timestamp
-        metrics.last_attestation = e.ledger().timestamp();
-        
-        // Store updated health metrics
-        Self::store_health_metrics(&e, &metrics);
-        
-        // Clear reentrancy guard
-        e.storage().instance().set(&guard_key, &false);
-        
-        // Emit FeeRecorded event
-        e.events().publish(
-            (Symbol::new(&e, "FeeRecorded"), commitment_id),
-            (fee_amount, e.ledger().timestamp()),
-        );
-
-        Ok(())
+        let attest_type = String::from_str(&e, "fee_generation");
+        Self::attest(e, caller, commitment_id, attest_type, data, true)
     }
 
     /// Record drawdown event
@@ -1119,63 +1050,8 @@ fn is_authorized_verifier(e: &Env, address: &Address) -> bool {
             Self::i128_to_string(&e, max_loss),
         );
 
-            // Store violation attestation
-            let atts_key = (symbol_short!("ATTS"), commitment_id.clone());
-            let mut attestations: Vec<Attestation> = e
-                .storage()
-                .persistent()
-                .get(&atts_key)
-                .unwrap_or_else(|| Vec::new(&e));
-            attestations.push_back(violation_attestation);
-            e.storage().persistent().set(&atts_key, &attestations);
-
-            // Emit ViolationDetected event
-            e.events().publish(
-                (Symbol::new(&e, "ViolationDetected"), commitment_id.clone()),
-                (drawdown_percent, max_loss_percent, e.ledger().timestamp()),
-            );
-        }
-        
-        // Create drawdown attestation
-        let drawdown_data = Map::new(&e);
-        let drawdown_attestation = Attestation {
-            commitment_id: commitment_id.clone(),
-            attestation_type: String::from_str(&e, "drawdown"),
-            data: drawdown_data,
-            timestamp: e.ledger().timestamp(),
-            verified_by: caller.clone(),
-            is_compliant: !is_violation,
-        };
-
-        // Store drawdown attestation
-        let atts_key = (symbol_short!("ATTS"), commitment_id.clone());
-        let mut attestations: Vec<Attestation> = e
-            .storage()
-            .persistent()
-            .get(&atts_key)
-            .unwrap_or_else(|| Vec::new(&e));
-        attestations.push_back(drawdown_attestation);
-        e.storage().persistent().set(&atts_key, &attestations);
-        
-        // Recalculate compliance score (may call external contract)
-        metrics.compliance_score = Self::calculate_compliance_score(e.clone(), commitment_id.clone());
-        
-        // Update last attestation timestamp
-        metrics.last_attestation = e.ledger().timestamp();
-        
-        // Store updated health metrics
-        Self::store_health_metrics(&e, &metrics);
-        
-        // Clear reentrancy guard
-        e.storage().instance().set(&guard_key, &false);
-        
-        // Emit DrawdownRecorded event
-        e.events().publish(
-            (Symbol::new(&e, "DrawdownRecorded"), commitment_id),
-            (drawdown_percent, is_compliant, e.ledger().timestamp()),
-        );
-
-        Ok(())
+        let attest_type = String::from_str(&e, "drawdown");
+        Self::attest(e, caller, commitment_id, attest_type, data, is_compliant)
     }
 
     /// Convert i128 to String (helper function)
