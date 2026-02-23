@@ -10,6 +10,41 @@ use soroban_sdk::{
     Env, IntoVal, Map, String,
 };
 
+// ============================================================================
+// Mock Core Contract for testing (lightweight stub of commitment_core)
+// ============================================================================
+
+#[contracttype]
+pub enum MockDataKey {
+    Commitment(String),
+    Violations(String),
+}
+
+#[contract]
+pub struct MockCoreContract;
+
+#[contractimpl]
+impl MockCoreContract {
+    pub fn get_commitment(e: Env, commitment_id: String) -> Commitment {
+        e.storage()
+            .instance()
+            .get::<_, Commitment>(&MockDataKey::Commitment(commitment_id))
+            .unwrap_or_else(|| panic!("Commitment not found in mock"))
+    }
+
+    pub fn set_commitment(e: Env, commitment_id: String, commitment: Commitment) {
+        e.storage()
+            .instance()
+            .set(&MockDataKey::Commitment(commitment_id), &commitment);
+    }
+
+    pub fn set_violations(e: Env, commitment_id: String, has_violations: bool) {
+        e.storage()
+            .instance()
+            .set(&MockDataKey::Violations(commitment_id), &has_violations);
+    }
+}
+
 fn store_core_commitment(
     e: &Env,
     commitment_core_id: &Address,
@@ -32,7 +67,6 @@ fn store_core_commitment(
             commitment_type: String::from_str(e, "balanced"),
             early_exit_penalty: 10,
             min_fee_threshold: 1000,
-            grace_period_days: 3,
         },
         amount,
         asset_address: Address::generate(e),
@@ -55,23 +89,34 @@ fn setup_test_env() -> (Env, Address, Address, Address) {
     let e = Env::default();
     e.mock_all_auths();
     let admin = Address::generate(&e);
-    let commitment_core_id = e.register_contract(None, MockCoreContract);
-    let _contract_id = e.register_contract(None, AttestationEngineContract);
 
-    e.as_contract(&_contract_id, || {
-        AttestationEngineContract::initialize(e.clone(), admin, commitment_core_id);
+    // Register and initialize commitment_core contract
+    let nft_contract = Address::generate(&e);
+    let commitment_core_id = e.register_contract(None, CommitmentCoreContract);
+    e.as_contract(&commitment_core_id, || {
+        CommitmentCoreContract::initialize(e.clone(), admin.clone(), nft_contract.clone());
     });
+
+    // Register and initialize attestation_engine contract
+    let contract_id = e.register_contract(None, AttestationEngineContract);
+    e.as_contract(&contract_id, || {
+        AttestationEngineContract::initialize(e.clone(), admin.clone(), commitment_core_id.clone())
+            .unwrap();
+    });
+
+    (e, admin, commitment_core_id, contract_id)
 }
 
 #[test]
 fn test_attest() {
     let e = Env::default();
-    let verified_by = Address::generate(&e);
+    e.mock_all_auths();
+    let admin = Address::generate(&e);
     let core_id = e.register_contract(None, MockCoreContract);
     let _contract_id = e.register_contract(None, AttestationEngineContract);
 
     e.as_contract(&_contract_id, || {
-        AttestationEngineContract::initialize(e.clone(), Address::generate(&e), core_id.clone());
+        AttestationEngineContract::initialize(e.clone(), admin.clone(), core_id.clone()).unwrap();
     });
 
     let commitment_id = String::from_str(&e, "c1");
@@ -106,11 +151,12 @@ fn test_attest() {
     e.as_contract(&_contract_id, || {
         AttestationEngineContract::attest(
             e.clone(),
+            admin.clone(),
             commitment_id.clone(),
             String::from_str(&e, "health_check"),
             data,
-            verified_by,
-        );
+            true,
+        ).unwrap();
     });
 
     let atts = e.as_contract(&_contract_id, || {
@@ -122,15 +168,17 @@ fn test_attest() {
 #[test]
 fn test_verify_compliance() {
     let e = Env::default();
+    e.mock_all_auths();
     // Set a deterministic ledger timestamp for duration checks.
     e.ledger().with_mut(|li| {
         li.timestamp = 50;
     });
 
+    let admin = Address::generate(&e);
     let core_id = e.register_contract(None, MockCoreContract);
     let _contract_id = e.register_contract(None, AttestationEngineContract);
     e.as_contract(&_contract_id, || {
-        AttestationEngineContract::initialize(e.clone(), Address::generate(&e), core_id.clone());
+        AttestationEngineContract::initialize(e.clone(), admin.clone(), core_id.clone()).unwrap();
     });
 
     let commitment_id = String::from_str(&e, "c1");
@@ -162,7 +210,7 @@ fn test_verify_compliance() {
         MockCoreContract::set_violations(e.clone(), commitment_id.clone(), false);
     });
     e.as_contract(&_contract_id, || {
-        AttestationEngineContract::record_fees(e.clone(), commitment_id.clone(), 100);
+        AttestationEngineContract::record_fees(e.clone(), admin.clone(), commitment_id.clone(), 100).unwrap();
     });
 
     assert!(e.as_contract(&_contract_id, || {
@@ -245,26 +293,6 @@ fn test_verify_compliance() {
     assert!(e.as_contract(&_contract_id, || {
         AttestationEngineContract::verify_compliance(e.clone(), commitment_id3)
     }));
-
-    // Register and initialize commitment_core contract
-    let commitment_core_id = e.register_contract(None, CommitmentCoreContract);
-    let nft_contract = Address::generate(&e);
-
-    // Initialize commitment_core contract
-    e.as_contract(&commitment_core_id, || {
-        CommitmentCoreContract::initialize(e.clone(), admin.clone(), nft_contract.clone());
-    });
-
-    // Register attestation_engine contract
-    let contract_id = e.register_contract(None, AttestationEngineContract);
-
-    // Initialize attestation_engine contract
-    e.as_contract(&contract_id, || {
-        AttestationEngineContract::initialize(e.clone(), admin.clone(), commitment_core_id.clone())
-            .unwrap();
-    });
-
-    (e, admin, commitment_core_id, contract_id)
 }
 
 #[test]
@@ -634,7 +662,7 @@ fn test_attest_and_get_metrics() {
         30,
         1000,
     );
-    let attestation_type = String::from_str(&e, "general");
+    let attestation_type = String::from_str(&e, "health_check");
     let mut data = Map::new(&e);
     data.set(
         String::from_str(&e, "note"),
@@ -837,24 +865,29 @@ fn test_attest_authorized_verifier() {
         1000,
     );
 
+    let client = AttestationEngineContractClient::new(&e, &contract_id);
     // record_fees requires caller (admin)
-    client.record_fees(&admin, &commitment_id, &100);
+    client.record_fees(&admin, &commitment_id, &100i128);
+
+    // Capture events right after record_fees (before add_verifier changes last event)
+    let events_after_fees = e.events().all();
+    let fee_event = events_after_fees.last().unwrap();
+    assert_eq!(fee_event.0, contract_id);
+    assert_eq!(
+        fee_event.1,
+        vec![
+            &e,
+            Symbol::new(&e, "AttestationRecorded").into_val(&e),
+            commitment_id.clone().into_val(&e),
+            admin.clone().into_val(&e),
+        ]
+    );
 
     // Add verifier
     e.as_contract(&contract_id, || {
         AttestationEngineContract::add_verifier(e.clone(), admin.clone(), verifier.clone())
             .unwrap();
     });
-
-    assert_eq!(last_event.0, contract_id);
-    assert_eq!(
-        last_event.1,
-        vec![
-            &e,
-            symbol_short!("FeeRec").into_val(&e),
-            commitment_id.into_val(&e)
-        ]
-    );
 
     // Use invalid attestation type
     let attestation_type = String::from_str(&e, "invalid_type");
@@ -908,15 +941,8 @@ fn test_attest_invalid_data_violation() {
         )
     });
 
-    assert_eq!(last_event.0, contract_id);
-    assert_eq!(
-        last_event.1,
-        vec![
-            &e,
-            symbol_short!("Drawdown").into_val(&e),
-            commitment_id.into_val(&e)
-        ]
-    );
+    // Attest failed with InvalidAttestationData — no event emitted
+    assert_eq!(result, Err(AttestationError::InvalidAttestationData));
 
     // fee_generation requires "fee_amount" field
     let attestation_type = String::from_str(&e, "fee_generation");
@@ -1672,12 +1698,15 @@ fn test_record_fees_event() {
         last_event.1,
         vec![
             &e,
-            Symbol::new(&e, "FeeRecorded").into_val(&e),
-            commitment_id.into_val(&e)
+            Symbol::new(&e, "AttestationRecorded").into_val(&e),
+            commitment_id.clone().into_val(&e),
+            admin.clone().into_val(&e),
         ]
     );
-    let event_data: (i128, u64) = last_event.2.into_val(&e);
-    assert_eq!(event_data.0, 100);
+    // event data: (attestation_type, is_compliant, timestamp)
+    let event_data: (String, bool, u64) = last_event.2.into_val(&e);
+    assert_eq!(event_data.0, String::from_str(&e, "fee_generation"));
+    assert_eq!(event_data.1, true);
 }
 
 #[test]
@@ -1712,13 +1741,14 @@ fn test_record_drawdown_event() {
         last_event.1,
         vec![
             &e,
-            Symbol::new(&e, "DrawdownRecorded").into_val(&e),
-            commitment_id.into_val(&e)
+            Symbol::new(&e, "AttestationRecorded").into_val(&e),
+            commitment_id.clone().into_val(&e),
+            admin.clone().into_val(&e),
         ]
     );
-    let event_data: (i128, bool, u64) = last_event.2.into_val(&e);
-    // (drawdown_percent, is_compliant, timestamp)
-    assert_eq!(event_data.0, 5);
+    // event data: (attestation_type, is_compliant, timestamp)
+    let event_data: (String, bool, u64) = last_event.2.into_val(&e);
+    assert_eq!(event_data.0, String::from_str(&e, "drawdown"));
     assert_eq!(event_data.1, true);
 }
 

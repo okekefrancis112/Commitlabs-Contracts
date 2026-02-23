@@ -1186,13 +1186,19 @@ fn test_unpause_restores_transfer() {
     let token_id = client.mint(
         &owner1,
         &String::from_str(&e, "commitment_002"),
-        &30,
+        &1, // 1 day duration so we can settle it
         &10,
         &String::from_str(&e, "balanced"),
         &1000,
         &asset_address,
         &5,
     );
+
+    // Advance time past expiration and settle the NFT to unlock it
+    e.ledger().with_mut(|li| {
+        li.timestamp = 172800; // 2 days in seconds
+    });
+    client.settle(&token_id);
 
     client.pause();
     client.unpause();

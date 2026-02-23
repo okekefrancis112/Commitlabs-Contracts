@@ -1,9 +1,14 @@
 #![no_std]
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, symbol_short, token, Address, Env, IntoVal,
-    Map, String, Symbol, TryIntoVal, Val, Vec,
+    contract, contracterror, contractimpl, contracttype, symbol_short, token, Address, BytesN, Env,
+    IntoVal, Map, String, Symbol, TryIntoVal, Val, Vec,
 };
-use shared_utils::{RateLimiter, Pausable};
+use shared_utils::{
+    batch::{BatchError, BatchMode, BatchProcessor, BatchResultVoid},
+    RateLimiter, Pausable,
+};
+
+const CURRENT_VERSION: u32 = 1;
 
 // ============================================================================
 // Error Types
@@ -36,6 +41,12 @@ pub enum AttestationError {
     FeeRecipientNotSet = 10,
     /// Insufficient collected fees to withdraw
     InsufficientFees = 11,
+    /// Migration already applied at current version
+    AlreadyMigrated = 12,
+    /// Invalid version for migration
+    InvalidVersion = 13,
+    /// Invalid WASM hash (all zeros)
+    InvalidWasmHash = 14,
 }
 
 // ============================================================================
@@ -75,6 +86,8 @@ pub enum DataKey {
     AttestationFeeAsset,
     /// Collected fees per asset (asset -> i128)
     CollectedFees(Address),
+    /// Contract version for migration tracking
+    Version,
 }
 
 #[contracttype]
@@ -107,7 +120,6 @@ pub struct CommitmentRules {
     pub commitment_type: String, // "safe", "balanced", "aggressive"
     pub early_exit_penalty: u32,
     pub min_fee_threshold: i128,
-    pub grace_period_days: u32,
 }
 
 #[contracttype]
@@ -696,13 +708,16 @@ fn is_authorized_verifier(e: &Env, address: &Address) -> bool {
         // 8. Create attestation record
         let timestamp = e.ledger().timestamp();
         let attestation = Attestation {
-            commitment_id: commitment_id_clone,
-            attestation_type: attestation_type_clone,
-            data: data_clone,
-            timestamp: e.ledger().timestamp(),
-            verified_by: verified_by_clone,
-            is_compliant: true, // Default to true, can be updated by logic
+            commitment_id: commitment_id.clone(),
+            attestation_type: attestation_type.clone(),
+            data: data.clone(),
+            timestamp,
+            verified_by: caller.clone(),
+            is_compliant,
         };
+
+        // 10. Update health metrics (before push_back to retain ownership)
+        Self::update_health_metrics(&e, &commitment_id, &attestation);
 
         // 9. Store attestation in commitment's list
         let key = DataKey::Attestations(commitment_id.clone());
@@ -717,9 +732,6 @@ fn is_authorized_verifier(e: &Env, address: &Address) -> bool {
 
         // Store updated list
         e.storage().persistent().set(&key, &attestations);
-
-        // 10. Update health metrics
-        Self::update_health_metrics(&e, &commitment_id, &attestation);
 
         // 11. Increment attestation counter
         let counter_key = DataKey::AttestationCounter(commitment_id.clone());
@@ -749,7 +761,7 @@ fn is_authorized_verifier(e: &Env, address: &Address) -> bool {
 
         // Track violations (explicit or non-compliant)
         let violation_type = String::from_str(&e, "violation");
-        if attestation.attestation_type == violation_type || !attestation.is_compliant {
+        if attestation_type == violation_type || !is_compliant {
             e.storage()
                 .instance()
                 .set(&DataKey::TotalViolations, &(total_violations + 1));
@@ -795,14 +807,11 @@ fn is_authorized_verifier(e: &Env, address: &Address) -> bool {
 
     /// Get current health metrics for a commitment
     pub fn get_health_metrics(e: Env, commitment_id: String) -> HealthMetrics {
-        let core = Self::get_commitment_core(&e);
-        let commitment = Self::core_get_commitment(&e, &core, &commitment_id);
-
-        let initial_value = commitment.amount;
-        let current_value = commitment.current_value;
-        let drawdown_percent = Self::calc_drawdown_percent(initial_value, current_value);
-
-        let state = Self::get_health_state_or_default(&e, &commitment_id);
+        // Get stored health metrics (updated incrementally by update_health_metrics)
+        let stored: Option<HealthMetrics> = e
+            .storage()
+            .persistent()
+            .get(&DataKey::HealthMetrics(commitment_id.clone()));
 
         // Get commitment from core contract
         let commitment_core: Address = e.storage().instance().get(&DataKey::CoreContract).unwrap();
@@ -877,60 +886,23 @@ fn is_authorized_verifier(e: &Env, address: &Address) -> bool {
         // Calculate compliance score
         let compliance_score = Self::calculate_compliance_score(e.clone(), commitment_id.clone());
 
+        let (fees_generated, volatility_exposure, last_attestation, compliance_score) =
+            if let Some(ref s) = stored {
+                (s.fees_generated, s.volatility_exposure, s.last_attestation, s.compliance_score)
+            } else {
+                (0, 0, 0, 100)
+            };
+
         HealthMetrics {
             commitment_id,
             current_value,
             initial_value,
             drawdown_percent,
-            fees_generated: state.fees_generated,
-            volatility_exposure: state.volatility_exposure,
-            last_attestation: state.last_attestation,
-            compliance_score: state.compliance_score,
+            fees_generated,
+            volatility_exposure,
+            last_attestation,
+            compliance_score,
         }
-    }
-
-    /// Record fee generation
-    ///
-    /// Convenience function that creates a fee_generation attestation
-    ///
-    /// # Arguments
-    /// * `caller` - Must be authorized verifier
-    /// * `commitment_id` - The commitment generating fees
-    /// * `fee_amount` - The fee amount generated
-    /// Verify commitment compliance
-    pub fn verify_compliance(e: Env, commitment_id: String) -> bool {
-        let core = Self::get_commitment_core(&e);
-        let commitment = Self::core_get_commitment(&e, &core, &commitment_id);
-        let health = Self::get_health_metrics(e.clone(), commitment_id.clone());
-        let has_violations = Self::core_check_violations(&e, &core, &commitment_id);
-
-        // Loss limit compliance
-        let max_loss = commitment.rules.max_loss_percent as i128;
-        let loss_ok = health.drawdown_percent <= max_loss;
-
-        // Duration compliance (if applicable)
-        let now = e.ledger().timestamp();
-        let duration_ok = if commitment.rules.duration_days == 0 {
-            true
-        } else {
-            now <= commitment.expires_at
-        };
-
-        // Fee threshold compliance (if applicable)
-        let fee_ok = if commitment.rules.min_fee_threshold <= 0 {
-            true
-        } else {
-            health.fees_generated >= commitment.rules.min_fee_threshold
-        };
-
-        // Overall health compliance (if score is present; 0 means unknown)
-        let overall_health_ok = health.compliance_score == 0 || health.compliance_score >= 80;
-
-        // Status-based sanity checks
-        let status_violated = commitment.status == String::from_str(&e, "violated");
-        let status_ok = !status_violated;
-
-        loss_ok && duration_ok && fee_ok && overall_health_ok && !has_violations && status_ok
     }
 
     /// Record fee generation
@@ -965,7 +937,7 @@ fn is_authorized_verifier(e: &Env, address: &Address) -> bool {
         };
 
         // Get health metrics
-        let metrics = Self::get_health_metrics(e.clone(), commitment_id);
+        let metrics = Self::get_health_metrics(e.clone(), commitment_id.clone());
 
         // Check compliance rules
         let max_loss = commitment.rules.max_loss_percent as i128;
@@ -975,8 +947,29 @@ fn is_authorized_verifier(e: &Env, address: &Address) -> bool {
             return false;
         }
 
+        // Check duration compliance
+        if commitment.rules.duration_days > 0 {
+            let now = e.ledger().timestamp();
+            if now > commitment.expires_at {
+                return false;
+            }
+        }
+
+        // Check fee threshold compliance
+        if commitment.rules.min_fee_threshold > 0 {
+            if metrics.fees_generated < commitment.rules.min_fee_threshold {
+                return false;
+            }
+        }
+
+        // Check status
+        let violated_status = String::from_str(&e, "violated");
+        if commitment.status == violated_status {
+            return false;
+        }
+
         // Check compliance score threshold (below 50 is non-compliant)
-        if metrics.compliance_score < 50 {
+        if metrics.compliance_score > 0 && metrics.compliance_score < 50 {
             return false;
         }
 
