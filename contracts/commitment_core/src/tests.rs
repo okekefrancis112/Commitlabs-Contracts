@@ -647,7 +647,8 @@ fn test_update_value_event() {
 
     e.as_contract(&contract_id, || {
         CommitmentCoreContract::initialize(e.clone(), admin.clone(), nft_contract.clone());
-        add_authorized_updater(&e, &updater);
+        // Authorize the updater via allocation contract
+        CommitmentCoreContract::set_allocation_contract(e.clone(), admin.clone(), updater.clone());
         let commitment = create_test_commitment(
             &e,
             "test_id",
@@ -662,11 +663,16 @@ fn test_update_value_event() {
         e.storage()
             .instance()
             .set(&DataKey::TotalValueLocked, &1000i128);
+        
+        CommitmentCoreContract::update_value(
+            e.clone(),
+            updater.clone(),
+            commitment_id.clone(),
+            1100,
+        );
     });
 
     let client = CommitmentCoreContractClient::new(&e, &contract_id);
-    client.update_value(&updater, &commitment_id, &1100);
-
     let updated = client.get_commitment(&commitment_id);
     assert_eq!(updated.current_value, 1100);
     assert_eq!(client.get_total_value_locked(), 1100);
@@ -686,7 +692,8 @@ fn test_update_value_rate_limit_enforced() {
 
     e.as_contract(&contract_id, || {
         CommitmentCoreContract::initialize(e.clone(), admin.clone(), nft_contract.clone());
-        add_authorized_updater(&e, &updater);
+        // Authorize the updater via allocation contract
+        CommitmentCoreContract::set_allocation_contract(e.clone(), admin.clone(), updater.clone());
         CommitmentCoreContract::set_rate_limit(
             e.clone(),
             admin.clone(),
@@ -708,13 +715,22 @@ fn test_update_value_rate_limit_enforced() {
         e.storage()
             .instance()
             .set(&DataKey::TotalValueLocked, &1000i128);
+        
+        // First call — allowed
+        CommitmentCoreContract::update_value(
+            e.clone(),
+            updater.clone(),
+            commitment_id.clone(),
+            100,
+        );
+        // Second call — should hit rate limit and panic
+        CommitmentCoreContract::update_value(
+            e.clone(),
+            updater.clone(),
+            commitment_id.clone(),
+            200,
+        );
     });
-
-    let client = CommitmentCoreContractClient::new(&e, &contract_id);
-    // First call — allowed
-    client.update_value(&updater, &commitment_id, &100);
-    // Second call — should hit rate limit and panic
-    client.update_value(&updater, &commitment_id, &200);
 }
 
 #[test]
@@ -1240,6 +1256,7 @@ fn test_update_value_unauthorized_caller() {
         // unauthorized is NOT admin or in allocation contract, so this must panic
         CommitmentCoreContract::update_value(
             e.clone(),
+            unauthorized.clone(),
             String::from_str(&e, "test_id"),
             900,
         );
@@ -1266,7 +1283,7 @@ fn test_update_value_no_violation() {
     });
 
     e.as_contract(&contract_id, || {
-        CommitmentCoreContract::update_value(e.clone(), String::from_str(&e, "test_id"), 950);
+        CommitmentCoreContract::update_value(e.clone(), admin.clone(), String::from_str(&e, "test_id"), 950);
     });
 
     let client = CommitmentCoreContractClient::new(&e, &contract_id);

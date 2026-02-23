@@ -566,7 +566,6 @@ impl CommitmentCoreContract {
 
     /// Set allocation contract address (only admin can call)
     pub fn set_allocation_contract(e: Env, caller: Address, allocation_contract: Address) {
-        caller.require_auth();
         require_admin(&e, &caller);
         e.storage()
             .instance()
@@ -582,9 +581,11 @@ impl CommitmentCoreContract {
 
     /// Update commitment value (called by allocation logic or oracle-fed keeper).
     /// Persists new_value to commitment.current_value and updates TotalValueLocked.
-    pub fn update_value(e: Env, commitment_id: String, new_value: i128) {
+    /// 
+    /// # Access Control
+    /// Only the admin or authorized allocation contract can call this function.
+    pub fn update_value(e: Env, caller: Address, commitment_id: String, new_value: i128) {
         // Access control: only admin or authorized allocation contract can update value
-        let caller = e.invoker();
         let admin = e
             .storage()
             .instance()
